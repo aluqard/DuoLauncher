@@ -47,9 +47,9 @@ internal fun DuneWallpaper(modifier: Modifier = Modifier.fillMaxSize(), live: Bo
     val photo = produceState(initialValue = initial, key1 = context, key2 = revision) {
         value = withContext(Dispatchers.IO) { loadLauncherBackground(context) }
     }.value
-    if (!live) { Canvas(modifier) { drawLauncherBackground(photo?.asImageBitmap(), palette.dark) }; return }
-    // Home's own background: the folded screen may show its own photo, and the image can drift with tilt.
     val settings by WallpaperStore.load(context).collectAsState()
+    if (!live) { Canvas(modifier) { drawLauncherBackground(photo?.asImageBitmap(), palette.dark, settings.scene) }; return }
+    // Home's own background: the folded screen may show its own photo, and the image can drift with tilt.
     val folded = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 650
     val coverRevision = CoverBackground.revision.intValue
     val cover = if (folded && settings.coverPhoto) produceState(CoverBackground.peek(), coverRevision) {
@@ -64,12 +64,16 @@ internal fun DuneWallpaper(modifier: Modifier = Modifier.fillMaxSize(), live: Bo
         val zoom = 1f + 2f * shift / size.minDimension.coerceAtLeast(1f)
         scaleX = zoom; scaleY = zoom
         translationX = t.x * shift; translationY = -t.y * shift
-    }) { drawLauncherBackground(shown?.asImageBitmap(), palette.dark) }
+    }) { drawLauncherBackground(shown?.asImageBitmap(), palette.dark, settings.scene) }
 }
 
-internal fun DrawScope.drawLauncherBackground(photo: ImageBitmap?, dark: Boolean = false) {
+internal fun DrawScope.drawLauncherBackground(photo: ImageBitmap?, dark: Boolean = false,
+    scene: BuiltInScene = WallpaperStore.state.value.scene) {
     if (photo == null || photo.width <= 0 || photo.height <= 0) {
-        drawDunes(dark)
+        when (scene) {
+            BuiltInScene.NIGHT -> drawStarryNight()
+            BuiltInScene.DUNES -> drawDunes(dark)
+        }
         return
     }
     val destinationWidth = size.width.toInt().coerceAtLeast(1)
@@ -91,6 +95,53 @@ internal fun DrawScope.drawLauncherBackground(photo: ImageBitmap?, dark: Boolean
         srcSize = IntSize(sourceWidth, sourceHeight),
         dstSize = IntSize(destinationWidth, destinationHeight),
     )
+}
+
+/** Stars as x and y (fractions of the screen), size and brightness; fixed, so the sky is the same every time. */
+private val nightStars: List<FloatArray> by lazy {
+    val random = java.util.Random(0x5EED_2026)
+    List(460) {
+        // Denser overhead, thinning toward the horizon glow.
+        val y = random.nextFloat().let { it * it } * .74f
+        floatArrayOf(random.nextFloat(), y, .45f + random.nextFloat().let { it * it * it } * 1.7f, .3f + random.nextFloat() * .7f)
+    }
+}
+
+/** A clear night over the dunes: deep sky full of stars, a last warm glow on the horizon, dark dune ridges. */
+internal fun DrawScope.drawStarryNight() {
+    val w = size.width; val h = size.height
+    drawRect(Brush.verticalGradient(0f to Color(0xFF03050B), .36f to Color(0xFF09101F), .56f to Color(0xFF191A2A),
+        .68f to Color(0xFF3E2A2D), .78f to Color(0xFF6A3C2B), 1f to Color(0xFF6A3C2B)))
+    drawRect(Brush.radialGradient(listOf(Color(0x40C77A42), Color.Transparent),
+        center = androidx.compose.ui.geometry.Offset(w * .32f, h * .76f), radius = maxOf(w, h) * .55f))
+    val unit = size.minDimension / 900f
+    nightStars.forEach { (x, y, radius, brightness) ->
+        val nearHorizon = (y / .74f).coerceIn(0f, 1f)
+        val center = androidx.compose.ui.geometry.Offset(x * w, y * h)
+        val alpha = brightness * (1f - .7f * nearHorizon)
+        if (radius > 1.7f) {
+            // A soft glow that fades out, not a flat disc.
+            val glow = radius * unit * 3.2f
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = alpha * .3f), Color.Transparent), center, glow), glow, center)
+        }
+        drawCircle(Color.White.copy(alpha = alpha), radius * unit, center)
+    }
+    fun ridge(y: Float, crest: Float, shift: Float, color: Color) {
+        val path = Path().apply {
+            moveTo(0f, h * y)
+            cubicTo(w * (.22f + shift), h * (y - crest), w * (.58f + shift), h * (y + crest * .55f), w, h * (y - crest * .45f))
+            lineTo(w, h); lineTo(0f, h); close()
+        }
+        drawPath(path, color)
+        val rim = Path().apply {
+            moveTo(0f, h * y)
+            cubicTo(w * (.22f + shift), h * (y - crest), w * (.58f + shift), h * (y + crest * .55f), w, h * (y - crest * .45f))
+        }
+        drawPath(rim, Color(0x2EE3A271), style = androidx.compose.ui.graphics.drawscope.Stroke(1.6f * unit))
+    }
+    ridge(.70f, .09f, .06f, Color(0xFF1E1519))
+    ridge(.79f, .12f, -.04f, Color(0xFF130E12))
+    ridge(.89f, .08f, .10f, Color(0xFF09080B))
 }
 
 internal fun DrawScope.drawDunes(dark: Boolean = false) {
@@ -127,6 +178,7 @@ class DuneWallpaperService : WallpaperService() {
         private val appearance = AppearanceStore(this@DuneWallpaperService)
         private val appearancePrefs = getSharedPreferences("appearance", MODE_PRIVATE)
         private val backgroundPrefs = launcherBackgroundPreferences(this@DuneWallpaperService)
+        private val wallpaperPrefs = getSharedPreferences("wallpaper", MODE_PRIVATE)
         private val loader = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         private var photo: ImageBitmap? = cachedLauncherBackground(this@DuneWallpaperService)?.asImageBitmap()
         private var photoLoad = 0
@@ -168,11 +220,13 @@ class DuneWallpaperService : WallpaperService() {
                 photo = cachedLauncherBackground(this@DuneWallpaperService)?.asImageBitmap()
                 appearancePrefs.registerOnSharedPreferenceChangeListener(this)
                 backgroundPrefs.registerOnSharedPreferenceChangeListener(this)
+                wallpaperPrefs.registerOnSharedPreferenceChangeListener(this)
                 registerTimeReceiver()
                 appearance.reloadFromPreferences(systemDark()); render(surfaceHolder)
             } else {
                 appearancePrefs.unregisterOnSharedPreferenceChangeListener(this)
                 backgroundPrefs.unregisterOnSharedPreferenceChangeListener(this)
+                wallpaperPrefs.unregisterOnSharedPreferenceChangeListener(this)
                 unregisterTimeReceiver()
             }
         }
@@ -182,6 +236,7 @@ class DuneWallpaperService : WallpaperService() {
             unregisterTimeReceiver()
             appearancePrefs.unregisterOnSharedPreferenceChangeListener(this)
             backgroundPrefs.unregisterOnSharedPreferenceChangeListener(this)
+            wallpaperPrefs.unregisterOnSharedPreferenceChangeListener(this)
             super.onDestroy()
         }
         override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -217,7 +272,8 @@ class DuneWallpaperService : WallpaperService() {
             try {
                 painter.draw(Density(resources.displayMetrics.density), LayoutDirection.Ltr,
                     androidx.compose.ui.graphics.Canvas(canvas), Size(canvas.width.toFloat(), canvas.height.toFloat())) {
-                        drawLauncherBackground(photo, appearance.state.dark)
+                        drawLauncherBackground(photo, appearance.state.dark,
+                            WallpaperStore.load(this@DuneWallpaperService).value.scene)
                     }
             } finally { holder.unlockCanvasAndPost(canvas) }
         }

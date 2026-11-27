@@ -8,6 +8,9 @@ const val AUTO_TOP_MARGIN = -1f
 /** Glass around a side dock's icon column: the saved dock width is the column, the bar is this much wider. */
 const val SIDE_DOCK_EDGE = 27f
 
+/** Room above a bottom dock for Home's Search pill. */
+const val BOTTOM_SEARCH_SPACE = 48f
+
 /** Width of a side dock's glass bar for a saved dock width. */
 fun sideDockBarWidth(dockWidth: Float) = dockWidth + SIDE_DOCK_EDGE
 
@@ -45,7 +48,7 @@ data class HomeGeometry(
     val dockSide: DockSide = DockSide.RIGHT,
     /** Height of a bottom dock bar; 0 for side docks. */
     val bottomDockHeight: Float = 0f,
-    /** Width of a side dock's glass bar; 0 for a bottom dock. */
+    /** Width of the dock's glass bar. */
     val dockWidth: Float = 0f,
     /** Size of the dock's app icons. */
     val dockIconSize: Float = 0f,
@@ -70,8 +73,8 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val expanded = width >= 650f
     val homeWidth = if (expanded) minOf(460f, width * 0.56f) else width
     val side = effectiveDockSide(p, expanded)
-    val dockBar = if (side == DockSide.BOTTOM) 0f else sideDockBarWidth(p.dockWidth)
-    val gridWidth = (homeWidth - dockBar - 44f).coerceAtLeast(192f)
+    val sideBar = if (side == DockSide.BOTTOM) 0f else sideDockBarWidth(p.dockWidth)
+    val gridWidth = (homeWidth - sideBar - 44f).coerceAtLeast(192f)
     val icon = minOf(p.iconSize, (gridWidth / 4f - 10f).coerceAtLeast(32f))
     // Keep the same icon rhythm when labels are hidden; allow larger system text to fit.
     val row = maxOf(48f, icon + if (labels) maxOf(20f, labelHeight) else 20f) + p.rowGap
@@ -79,7 +82,8 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     // A bottom dock is one row of dock-sized icons in a glass bar above the page controls.
     val bottomDock = if (side == DockSide.BOTTOM) dockIconSize(icon) + 28f else 0f
     val contentTop = if (p.topMargin >= 0f) p.topMargin
-        else ((height - widget - 18f - 4f * row - homeBottomSpace - bottomDock) / 2f).coerceIn(16f, 72f)
+        else ((height - widget - 18f - 4f * row - homeBottomSpace - bottomDock -
+            (if (side == DockSide.BOTTOM) BOTTOM_SEARCH_SPACE else 0f)) / 2f).coerceIn(16f, 72f)
     // Search reclaims the redundant bottom controls' space for all four dock apps.
     // Extremely short windows still scroll rather than reduce touch targets below 48dp.
     val topLimit = maxOf(8f, statusHeight)
@@ -87,7 +91,8 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     // A side dock holds four home-size icons, one slot per app row.
     val desiredHeight = 4f * row
     val dockHeight = minOf(desiredHeight, (height - topLimit - bottomReserve).coerceAtLeast(76f))
-    val dockRowHeight = if (side == DockSide.BOTTOM) (gridWidth / 4f).coerceAtLeast(48f) else (dockHeight / 4f).coerceIn(48f, maxOf(48f, row))
+    // A bottom dock groups its four icons in the middle, a little more than an icon apart.
+    val dockRowHeight = if (side == DockSide.BOTTOM) dockIconSize(icon) * 1.4f else (dockHeight / 4f).coerceIn(48f, maxOf(48f, row))
     val dockIcon = if (side == DockSide.BOTTOM) dockIconSize(icon) else minOf(icon, p.dockWidth, dockRowHeight - 6f)
     // Slots center their icons, so an aligned dock starts that far above the first app row and each
     // dock icon lines up with an app row's icon.
@@ -98,6 +103,8 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val homeDockTop = (if (p.dockAlignToGrid) contentTop + widget + 18f - slotInset else height * p.dockPosition - homeDockHeight / 2f)
         .coerceIn(topLimit, maxOf(topLimit, height - homeDockHeight - 124f))
     val dockTop = homeDockTop.coerceIn(topLimit, maxOf(topLimit, height - dockHeight - bottomReserve))
+    // A bottom dock's glass hugs its four icons, with the same 14dp edge at the sides as above and below.
+    val dockBar = if (side == DockSide.BOTTOM) 3f * dockRowHeight + dockIcon + 28f else sideBar
     return HomeGeometry(expanded, homeWidth, gridWidth, icon, row, widget, contentTop, dockTop, dockHeight, dockRowHeight,
         side, bottomDock, dockBar, dockIcon)
 }

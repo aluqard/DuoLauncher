@@ -40,7 +40,7 @@ android {
         targetSdk = 36
         versionCode = 30
         versionName = "0.15.0-beta01"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.jake.duolauncher.DuoTestRunner"
     }
     signingConfigs {
         if (releaseStoreFile != null) {

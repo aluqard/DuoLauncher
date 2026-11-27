@@ -40,3 +40,24 @@ internal fun Modifier.discoverSwipe(enabled: Boolean, onOpen: () -> Unit): Modif
 /** Reserve the dock's glass bar for the saved dock width plus its surrounding wallpaper, at any display density. */
 internal fun discoverDockFraction(widthDp: Float, dockWidthDp: Float): Float =
     ((sideDockBarWidth(dockWidthDp.coerceIn(56f, 84f)) + 28f) / widthDp.coerceAtLeast(1f)).coerceIn(.05f, .45f)
+
+/** Whether swiping right from the first Home page opens Discover. Off unless turned on in Gestures & search. */
+object DiscoverSwipeSetting {
+    private const val PREFS = "home_gestures"
+    private const val KEY = "discoverSwipe"
+    private val enabled = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private var loaded = false
+
+    fun enabled(context: android.content.Context): kotlinx.coroutines.flow.StateFlow<Boolean> {
+        if (!loaded) {
+            loaded = true
+            enabled.value = context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getBoolean(KEY, false)
+        }
+        return enabled
+    }
+
+    fun set(context: android.content.Context, on: Boolean) {
+        enabled(context); enabled.value = on
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
+    }
+}

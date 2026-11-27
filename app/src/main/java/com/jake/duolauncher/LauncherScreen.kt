@@ -214,13 +214,18 @@ fun LauncherScreen(
         onDispose { if (folderOwnsInput) LiveDiscover.setExternalResultPending(launcherActivity, "main", "folder-panel", false) }
     }
     val haptic = LocalHapticFeedback.current
+    // Discover opens from Home only when turned on in Gestures & search; otherwise Home has no page before it.
+    val discoverByGesture by DiscoverSwipeSetting.enabled(androidx.compose.ui.platform.LocalContext.current).collectAsState()
     val homePages = state.homePages
     val pendingNewPage = widgets.pendingPlacement?.page == homePages
     val visibleHomePages = homePages + if (drag.active || widgetSession != null || pendingNewPage) 1 else 0
     var expandedWorkspace by remember { mutableStateOf(false) }
-    val firstHome = if (DiscoverBounds.available) 1 else 0
+    val firstHome = if (DiscoverBounds.available && discoverByGesture) 1 else 0
     val pageCount = visibleHomePages + 1
-    val nativePager = rememberPagerState(initialPage = savedPage.coerceIn(-firstHome, pageCount - 1) + firstHome, pageCount = { pageCount + firstHome })
+    // Physical page numbers shift when the Discover page comes or goes, so the pager starts over then.
+    val nativePager = key(firstHome) {
+        rememberPagerState(initialPage = savedPage.coerceIn(-firstHome, pageCount - 1) + firstHome, pageCount = { pageCount + firstHome })
+    }
     val pager = remember(nativePager) { LauncherPager(nativePager, firstHome) }
     fun leaveTemporaryWidgetPage() {
         val persistedPages = model.state.value.homePages
@@ -370,14 +375,14 @@ fun LauncherScreen(
         }
     }
     val edgeWidth = with(LocalDensity.current) { 30.dp.toPx() }
-    val edgePointer = widgetSession?.takeIf { it.dragging }?.pointer ?: drag.pointer
-    val edgeActive = (drag.active && drag.moved) || widgetSession?.dragging == true
+    val edgePointer = widgetSession?.takeIf { it.dragging || it.moving }?.pointer ?: drag.pointer
+    val edgeActive = (drag.active && drag.moved) || widgetSession?.dragging == true || widgetSession?.moving == true
     val edge = if (!edgeActive) 0 else dragEdgeDirection(edgePointer, drag.rootBounds, edgeWidth)
     LaunchedEffect(edgeActive, edge) {
-        if (edge != 0) while (drag.active || widgetSession?.dragging == true) {
+        if (edge != 0) while (drag.active || widgetSession?.dragging == true || widgetSession?.moving == true) {
             delay(650)
             val next = (pager.currentPage + edge).coerceIn(0, homePages)
-            if ((!drag.active && widgetSession?.dragging != true) || next == pager.currentPage) break
+            if ((!drag.active && widgetSession?.dragging != true && widgetSession?.moving != true) || next == pager.currentPage) break
             // Do not key this effect on currentPage: it changes halfway through the
             // animation and would cancel the turn before the inner grid is visible.
             // Once the hold commits a turn, finish its animation while the finger moves
@@ -551,18 +556,29 @@ fun LauncherScreen(
                     }
                 },
                 onDownwardSwipe = launcherActivity::openSystemShade,
-                onLeadingOverscroll = if (firstHome == 0) onDiscover else null,
+                onLeadingOverscroll = if (firstHome == 0 && discoverByGesture) onDiscover else null,
                 jelly = jelly,
             ).graphicsLayer { jelly.apply(this) }) {
-            // Where the side dock sits over the unfolded pages, in the pages' own pixels.
-            val dockFrost = if (!geometry.expanded) null else remember(fullWidth, geometry.dockTop, geometry.dockWidth, geometry.dockHeight, density) {
+            // Where the dock sits over the pages, in the pages' own pixels: pages passing under it are frosted there.
+            // A left dock keeps a plain frosted wallpaper; its pages do not pass beneath it.
+            val bottomDockWidth = geometry.dockWidth.dp
+            val dockFrost = remember(side, fullWidth, contentHeight, bottomSpace, geometry, density) {
                 with(density) {
-                    frostPatchEffect(androidx.compose.ui.geometry.Rect(
-                        androidx.compose.ui.geometry.Offset((fullWidth - 12.dp - geometry.dockWidth.dp).toPx(), geometry.dockTop.dp.toPx()),
-                        androidx.compose.ui.geometry.Size(geometry.dockWidth.dp.toPx(), geometry.dockHeight.dp.toPx())),
-                        30.dp.toPx(), 14.dp.toPx())
+                    val patch = when (side) {
+                        DockSide.RIGHT -> androidx.compose.ui.geometry.Rect(
+                            androidx.compose.ui.geometry.Offset((fullWidth - 12.dp - geometry.dockWidth.dp).toPx(), geometry.dockTop.dp.toPx()),
+                            androidx.compose.ui.geometry.Size(geometry.dockWidth.dp.toPx(), geometry.dockHeight.dp.toPx()))
+                        DockSide.BOTTOM -> androidx.compose.ui.geometry.Rect(
+                            androidx.compose.ui.geometry.Offset(((fullWidth - bottomDockWidth) / 2f).toPx(),
+                                (contentHeight - bottomSpace - geometry.bottomDockHeight.dp).toPx()),
+                            androidx.compose.ui.geometry.Size(bottomDockWidth.toPx(), geometry.bottomDockHeight.dp.toPx()))
+                        DockSide.LEFT -> null
+                    }
+                    patch?.let { frostPatchEffect(it, 30.dp.toPx(), 10.dp.toPx()) }
                 }
             }
+            // Under a right dock pages run on to the screen edge while they move.
+            val passUnder = if (side == DockSide.RIGHT) pastEnd else 0.dp
             val pagerModifier = Modifier.offset(x = if (side == DockSide.LEFT) geometry.dockWidth.dp + 28.dp else 0.dp)
                 .fillMaxHeight().width(pagerWidth)
                 .drawWithContent {
@@ -574,7 +590,7 @@ fun LauncherScreen(
                     drawLayer(homeLayer)
                     LiveDiscover.host.get()?.invalidateFrame()
                 }.testTag("app-pager")
-                .discoverSwipe(firstHome == 0 && pager.currentPage == 0 && !drag.active && sheet.isEmpty() &&
+                .discoverSwipe(discoverByGesture && firstHome == 0 && pager.currentPage == 0 && !drag.active && sheet.isEmpty() &&
                     !showFirstRun && selectedId == null, onDiscover)
                 .onGloballyPositioned {
                     if (firstHome > 0) {
@@ -587,8 +603,11 @@ fun LauncherScreen(
                     }
                 }
                 .semantics { stateDescription = if (pager.currentPage == -1) "Discover" else if (pager.currentPage == visibleHomePages) "All apps" else "Home page ${pager.currentPage + 1} of $visibleHomePages" }
-            if (geometry.expanded && side != DockSide.BOTTOM) FrostedBackdrop(RoundedCornerShape(30.dp),
-                Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
+            // The dock's frosted wallpaper sits under the pages; the dock above adds only its tint and icons.
+            if (dockFrost != null) FrostedBackdrop(RoundedCornerShape(30.dp),
+                if (side == DockSide.BOTTOM) Modifier.align(Alignment.BottomCenter).padding(bottom = bottomSpace)
+                    .width(bottomDockWidth).height(geometry.bottomDockHeight.dp)
+                else Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
                     .width(geometry.dockWidth.dp).height(geometry.dockHeight.dp), drawScene = glassScene)
             if (geometry.expanded) {
                 Box(pagerModifier) {
@@ -598,7 +617,7 @@ fun LauncherScreen(
                         key = { if (it < firstHome) "discover" else if (it - firstHome == visibleHomePages) "library" else "home-${it - firstHome}" }) { }
                     ExpandedWorkspace(
                         nativePager = nativePager, motion = workspaceMotion!!, firstHome = firstHome,
-                        visibleHomePages = visibleHomePages, panelWidth = panelWidth, pastEnd = pastEnd, dockFrost = dockFrost,
+                        visibleHomePages = visibleHomePages, panelWidth = panelWidth, pastEnd = passUnder, dockFrost = dockFrost,
                         contentHeight = contentHeight, bottomSpace = bottomSpace, geometry = geometry,
                         state = state, previewSlots = previewLayout.slots, previewLeadingSlots = previewLayout.leadingSlots,
                         previewWidgetPlacements = previewLayout.widgetPlacements, appsById = appsById,
@@ -612,8 +631,19 @@ fun LauncherScreen(
                         onRefresh = model::refresh,
                     )
                 }
-            } else {
-                HorizontalPager(nativePager, pagerModifier,
+            } else Box(pagerModifier) {
+                // Like the unfolded workspace: the pager's layer reaches under a right dock so moving pages pass
+                // beneath it, frosted where the glass covers them; a bottom dock frosts All apps resting behind it.
+                val libraryPosition = (firstHome + visibleHomePages).toFloat()
+                HorizontalPager(nativePager, Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
+                    .requiredWidth(pagerWidth + passUnder).fillMaxHeight()
+                    .revealPastEnd(with(density) { pagerWidth.toPx() }, with(density) { passUnder.toPx() }, dockFrost,
+                        frostAtRest = {
+                            side == DockSide.BOTTOM && nativePager.currentPage + nativePager.currentPageOffsetFraction > libraryPosition - 1f
+                        }) {
+                        if (nativePager.isDiscoverBound(firstHome)) 0f else pastEndReveal(nativePager.currentPageOffsetFraction)
+                    },
+                    contentPadding = PaddingValues(end = passUnder),
                     // Keep adjacent Home panes attached so ordinary back-and-forth paging does
                     // not synchronously inflate provider RemoteViews inside the gesture frame.
                     // Discover is two physical positions before Home 2. Retain both Home
@@ -628,12 +658,15 @@ fun LauncherScreen(
                         AppLibrary(state, libraryQuery, { libraryQuery = it }, onLaunch, model::setPinned,
                             onActions = { selectedId = it.id }, modifier = Modifier.fillMaxSize().padding(start = 16.dp,
                                 end = if (side == DockSide.RIGHT) 0.dp else 16.dp, top = 16.dp,
-                                bottom = bottomSpace + geometry.bottomDockHeight.dp).testTag("library-page"),
-                            drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = { model.turnOnWork(it) })
+                                bottom = bottomSpace).testTag("library-page"),
+                            drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = { model.turnOnWork(it) },
+                            // A bottom dock floats over the lists' end, which scrolls clear of it.
+                            bottomInset = if (side == DockSide.BOTTOM) geometry.bottomDockHeight.dp + 8.dp else 0.dp)
                     } else {
                         Row(Modifier.fillMaxSize().testTag("home-surface")) {
                             HomePagePane(page, state, previewLayout.slots, previewLayout.leadingSlots, previewLayout.widgetPlacements, appsById, geometry, contentHeight,
-                                bottomSpace + geometry.bottomDockHeight.dp, widgets, drag, target, insertionTarget, showLargeWidget = false,
+                                bottomSpace + geometry.bottomDockHeight.dp + (if (side == DockSide.BOTTOM) BOTTOM_SEARCH_SPACE.dp else 0.dp),
+                                widgets, drag, target, insertionTarget, showLargeWidget = false,
                                 onLaunch = launchOrSelect, onActions = { selectedId = it.id },
                                 onWidget = { widgetSlot = it; widgetMenuSlot = it },
                                 onFolder = folderOrSelect,
@@ -654,18 +687,18 @@ fun LauncherScreen(
             val glassOpacity = ThemeStore.state.collectAsState().value.glassOpacity / .72f
             val glassShadow = if (WallpaperStore.state.collectAsState().value.glassShadow) 10.dp else 0.dp
             val dockTint = Glass.copy(alpha = (.32f * glassOpacity).coerceIn(0f, 1f))
-            if (side == DockSide.BOTTOM) GlassPanel(RoundedCornerShape(30.dp), dockTint, glassScene,
+            if (side == DockSide.BOTTOM) GlassPanel(RoundedCornerShape(30.dp), dockTint, if (dockFrost != null) null else glassScene,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = bottomSpace)
-                .width((geometry.dockRowHeight * 4f + 16f).dp).height(geometry.bottomDockHeight.dp)
+                .width(bottomDockWidth).height(geometry.bottomDockHeight.dp)
                 .outerShadow(glassShadow, RoundedCornerShape(30.dp)).testTag("dock")) {
-                Box(Modifier.padding(horizontal = 8.dp)) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     DockAppColumn(state.dock, previewLayout.dock, appsById, geometry.dockRowHeight,
                         geometry.dockIconSize, drag, insertionTarget,
                         onLaunch = onLaunchFrom, onChoose = { dockSlot = it; sheet = "dock" }, horizontal = true)
                 }
             } else GlassPanel(RoundedCornerShape(30.dp), dockTint,
-                // Unfolded, its frosted wallpaper sits under the pages and the pages frost themselves (see above).
-                if (geometry.expanded) null else glassScene,
+                // Its frosted wallpaper sits under the pages, which frost themselves where it covers them (see above).
+                if (dockFrost != null) null else glassScene,
                 Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
                 .width(geometry.dockWidth.dp).height(geometry.dockHeight.dp)
                 // The shadow sits outside the offscreen layer below, which would otherwise clip it to the dock's box.
@@ -680,6 +713,13 @@ fun LauncherScreen(
                         onLaunch = onLaunchFrom, onChoose = { dockSlot = it; sheet = "dock" })
                 }
             }
+            if (side == DockSide.BOTTOM && !inLibrary && !drag.active && !SelectionMode.active) SearchPill(glassShadow,
+                onClick = { openHomeSearch() },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    if (!onGoogleSearch(null)) openHomeSearch()
+                },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomSpace + geometry.bottomDockHeight.dp))
             if (SelectionMode.active && !pageEditor && sheet != "widgets" && widgetSession == null && resizeSlot == null) {
                 EditToolbar(state.canUndoEdit, onWidgets = {
                         widgetSlot = model.nextWidgetSlot(); widgetTargetIndex = pager.currentPage.coerceIn(0, homePages - 1) * HOME_CELLS
@@ -709,16 +749,7 @@ fun LauncherScreen(
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     PageDots(visibleHomePages, pager.currentPage, homePages.takeIf { visibleHomePages > homePages },
                         onPage = { index -> scope.launch { pager.animateScrollToPage(index) } },
-                        onDiscover = { openDiscover() }, onLibrary = { openLibrary() })
-                    // With a bottom dock the search control sits beside the dots instead of in the dock column.
-                    // Tap searches apps in All apps; touch and hold opens Google.
-                    if (side == DockSide.BOTTOM && !inLibrary && !drag.active) Box(Modifier.align(Alignment.CenterEnd).size(48.dp)
-                        .clip(CircleShape).combinedClickable(onClick = { openHomeSearch() }, onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (!onGoogleSearch(null)) openHomeSearch()
-                        }, onLongClickLabel = "Search Google").testTag("search"), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Search, "Search apps", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
+                        onDiscover = if (discoverByGesture) { { openDiscover() } } else null, onLibrary = { openLibrary() })
                 }
             }
             if (!inLibrary && !drag.active && side != DockSide.BOTTOM) Column(Modifier
@@ -870,6 +901,7 @@ fun LauncherScreen(
                 val footprint: (AppWidgetProviderInfo) -> WidgetSpan? = { provider ->
                     widgets.sizing(provider, pickerSizing)?.takeIf { it.minimumFitsGrid }?.preferred
                 }
+                // Page turns below wait two frames: a new temporary page joins the pager only after the session starts.
                 VisualWidgetPicker(catalog, catalogProfiles.ifEmpty { listOf(selectedProfile) }, selectedProfile,
                     onSelectProfile = { widgetProfileSerial = it.userSerial; widgetPlacementMessage = null },
                     onTurnOnWork = { model.turnOnWork(it) }, hiddenForDrag = widgetSession != null,
@@ -891,7 +923,7 @@ fun LauncherScreen(
                                     WidgetSpan(special.spanX, special.spanY), Offset.Zero,
                                     dragging = false, candidate = special)
                                 widgetPlacementMessage = null
-                                scope.launch { pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
+                                scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
                                 return@let
                             }
                             val requestedIndex = existing?.let { homeCellIndex(it.page, it.row * GRID_COLUMNS + it.column) }
@@ -912,7 +944,7 @@ fun LauncherScreen(
                             widgetSession = WidgetPickerSession(provider, widgetSlot, span, Offset.Zero,
                                 dragging = false, targetIndex = targetIndex)
                             widgetPlacementMessage = if (freeIndex == null) WIDGET_NO_ROOM_MESSAGE else null
-                            scope.launch { pager.scrollToPage(homeCellPage(targetIndex).coerceIn(0, homePages)) }
+                            scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(homeCellPage(targetIndex).coerceIn(0, homePages)) }
                         }
                     },
                     onBuiltin = builtin@{ builtinId ->
@@ -923,7 +955,7 @@ fun LauncherScreen(
                             widgetSession = WidgetPickerSession(null, widgetSlot, span, Offset.Zero,
                                 dragging = false, candidate = special, builtinId = builtinId)
                             widgetPlacementMessage = null
-                            scope.launch { pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
+                            scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
                             return@builtin
                         }
                         val requested = existing?.let {
@@ -944,19 +976,19 @@ fun LauncherScreen(
                             dragging = false, targetIndex = free ?: requested, builtinId = builtinId)
                         widgetPlacementMessage = if (free == null)
                             "There isn’t room for this card. Choose another page or move an item first." else null
-                        scope.launch { pager.scrollToPage(homeCellPage(free ?: requested).coerceIn(0, homePages)) }
+                        scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(homeCellPage(free ?: requested).coerceIn(0, homePages)) }
                     },
                     onDragStart = { provider, point ->
                         footprint(provider)?.let { span ->
                             widgetSession = WidgetPickerSession(provider, widgetSlot, span, point, dragging = true)
                             widgetPlacementMessage = null
-                            scope.launch { pager.scrollToPage(lastHomePage.coerceIn(0, homePages - 1)) }
+                            scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(lastHomePage.coerceIn(0, homePages - 1)) }
                         }
                     },
                     onBuiltinDragStart = { builtinId, point ->
                         widgetSession = WidgetPickerSession(null, widgetSlot, WidgetSpan(2, 2), point, dragging = true, builtinId = builtinId)
                         widgetPlacementMessage = null
-                        scope.launch { pager.scrollToPage(lastHomePage.coerceIn(0, homePages - 1)) }
+                        scope.launch { withFrameNanos { }; withFrameNanos { }; pager.scrollToPage(lastHomePage.coerceIn(0, homePages - 1)) }
                     },
                     onDrag = { point -> widgetSession = widgetSession?.copy(pointer = point) },
                     onDrop = {
@@ -984,9 +1016,10 @@ fun LauncherScreen(
                     // no Home-cell address; specialAnchor below is their visual anchor.
                     val candidateIndex = widgetDraft?.takeIf { session.candidate == null }
                         ?.let { homeCellIndex(it.page, it.row * GRID_COLUMNS + it.column) }
-                    val visualIndex = candidateIndex ?: widgetRawTarget?.index ?: session.targetIndex
+                    // While the preview is dragged it shows the spot under it, even a blocked one (drawn red).
+                    val visualIndex = candidateIndex ?: session.targetIndex.takeIf { session.moving }
+                        ?: widgetRawTarget?.index ?: session.targetIndex
                     val specialAnchor = session.candidate?.let { drag.regions[DropTarget.Widget(session.slot)]?.bounds }
-                    val anchor = specialAnchor ?: visualIndex?.let { drag.regions[DropTarget.Home(it)]?.bounds }
                     // Reads the live session and layout: the tap detector below outlives recompositions.
                     fun retargetWidget(page: Int, local: Int, covering: Boolean, pointer: Offset? = null) {
                         val current = widgetSession ?: return
@@ -999,18 +1032,90 @@ fun LauncherScreen(
                         widgetSession = current.copy(pointer = pointer ?: current.pointer, targetIndex = fitting ?: requested)
                         widgetPlacementMessage = if (fitting == null) WIDGET_NO_ROOM_MESSAGE else null
                     }
-                    Box(Modifier.fillMaxSize().testTag("widget-placement-mode")
+                    // Where this overlay sits on screen: cell bounds are measured from the top of the window, while
+                    // the overlay is inset below the status bar.
+                    var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
+                    val livePages by rememberUpdatedState(eligibleDragPages)
+                    // The cells the widget would cover (window coordinates), inset the way Home draws a widget in them.
+                    fun footprint(index: Int?, span: WidgetSpan): androidx.compose.ui.geometry.Rect? {
+                        index ?: return null
+                        val page = homeCellPage(index); val local = homeCellLocal(index)
+                        val column = local % GRID_COLUMNS; val row = local / GRID_COLUMNS
+                        val first = drag.regions[DropTarget.Home(index)]?.bounds ?: return null
+                        val lastRow = (row + span.height - 1).coerceAtMost(GRID_ROWS - 1)
+                        val lastColumn = (column + span.width - 1).coerceAtMost(GRID_COLUMNS - 1)
+                        val last = drag.regions[DropTarget.Home(homeCellIndex(page, lastRow * GRID_COLUMNS + lastColumn))]?.bounds
+                            ?: return null
+                        return with(placementDensity) {
+                            androidx.compose.ui.geometry.Rect(first.left + 5.dp.toPx(), first.top, last.right - 5.dp.toPx(),
+                                maxOf(first.top + 48.dp.toPx(), last.bottom - 18.dp.toPx()))
+                        }
+                    }
+                    // Where the grabbed point of the preview is held while dragging it.
+                    var grab by remember(session.slot) { mutableStateOf<Offset?>(null) }
+                    // The last spot the dragged preview fitted, where it returns if let go over a blocked one.
+                    var lastFit by remember(session.slot) { mutableStateOf<Int?>(null) }
+                    fun fitsAt(current: WidgetPickerSession, index: Int?) = index != null &&
+                        widgetCandidate(model.state.value.layout, current.slot, index, current.span.width, current.span.height) != null
+                    // Follow the dragged preview cell by cell: its top-left cell is the one under its top-left cell's
+                    // center, kept so the whole widget stays on the grid. A spot whose cells are taken is shown, in red.
+                    fun moveTo(point: Offset) {
+                        val current = widgetSession ?: return
+                        val held = grab ?: return
+                        val cell = current.targetIndex?.let { drag.regions[DropTarget.Home(it)]?.bounds }
+                        val probe = point - held + Offset((cell?.width ?: 0f) / 2f, (cell?.height ?: 0f) / 2f)
+                        val under = drag.regions.values.firstOrNull {
+                            it.target is DropTarget.Home && it.page in livePages && it.bounds.contains(probe)
+                        }?.target as? DropTarget.Home
+                        if (under == null) { widgetSession = current.copy(pointer = point); return }
+                        val local = homeCellLocal(under.index)
+                        val column = (local % GRID_COLUMNS).coerceAtMost(GRID_COLUMNS - current.span.width).coerceAtLeast(0)
+                        val row = (local / GRID_COLUMNS).coerceAtMost(GRID_ROWS - current.span.height).coerceAtLeast(0)
+                        val index = homeCellIndex(homeCellPage(under.index), row * GRID_COLUMNS + column)
+                        if (fitsAt(current, index)) lastFit = index
+                        widgetSession = current.copy(pointer = point, targetIndex = index)
+                        widgetPlacementMessage = null
+                    }
+                    fun endMove() {
+                        val current = widgetSession ?: return
+                        grab = null
+                        widgetSession = current.copy(moving = false,
+                            targetIndex = if (fitsAt(current, current.targetIndex)) current.targetIndex else lastFit ?: current.targetIndex)
+                    }
+                    // After an edge hold turns the page, place the still-held preview on the new page.
+                    LaunchedEffect(pager.settledPage, session.moving) { if (session.moving) moveTo(session.pointer) }
+                    Box(Modifier.fillMaxSize().onGloballyPositioned { overlayOrigin = it.positionInRoot() }
+                        .testTag("widget-placement-mode")
                         .then(if (!session.dragging && session.candidate == null)
-                            // Keyed on the eligible pages so a page change restarts the detector with the new page.
-                            Modifier.pointerInput(session.slot, session.span, eligibleDragPages) {
-                            detectTapGestures { local ->
-                                val point = local + drag.rootOrigin
-                                val cell = drag.regions.values.firstOrNull {
-                                    it.target is DropTarget.Home && it.page in eligibleDragPages && it.bounds.contains(point)
-                                }?.target as? DropTarget.Home
-                                cell?.let { retargetWidget(homeCellPage(it.index), homeCellLocal(it.index), covering = true, pointer = point) }
+                            Modifier.pointerInput(session.slot, session.span) {
+                                detectTapGestures { local ->
+                                    val point = local + overlayOrigin
+                                    val cell = drag.regions.values.firstOrNull {
+                                        it.target is DropTarget.Home && it.page in livePages && it.bounds.contains(point)
+                                    }?.target as? DropTarget.Home
+                                    cell?.let { retargetWidget(homeCellPage(it.index), homeCellLocal(it.index), covering = true, pointer = point) }
+                                }
+                            }.pointerInput(session.slot, session.span) {
+                                // Drag the preview: it follows the finger and its outline snaps from cell to cell.
+                                detectDragGestures(
+                                    onDragStart = { local ->
+                                        val point = local + overlayOrigin
+                                        val current = widgetSession
+                                        val rect = current?.let { footprint(it.targetIndex, it.span) }
+                                        if (current != null && rect != null && rect.contains(point)) {
+                                            grab = point - rect.topLeft
+                                            lastFit = current.targetIndex.takeIf { fitsAt(current, it) }
+                                            widgetSession = current.copy(moving = true, pointer = point)
+                                        }
+                                    },
+                                    onDrag = { change, _ ->
+                                        if (grab != null) { change.consume(); moveTo(change.position + overlayOrigin) }
+                                    },
+                                    onDragEnd = { endMove() },
+                                    onDragCancel = { endMove() },
+                                )
                             }
-                        } else Modifier)) {
+                        else Modifier)) {
                         Box(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()
                             .padding(start = 12.dp, end = 12.dp, top = 8.dp).testTag("widget-placement-toolbar")) {
                             Row(Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1056,52 +1161,54 @@ fun LauncherScreen(
                                 }
                             }
                         }
-                        if (anchor != null) {
-                            val density = LocalDensity.current
-                            val cellWidthPx = with(density) { (geometry.gridWidth / GRID_COLUMNS).dp.toPx() }
-                            fun pickerRowTop(row: Int): Float = if (row <= 2) row * with(density) { topPitch.dp.toPx() }
-                                else with(density) { (geometry.widgetHeight + 18f + (row - 2) * geometry.rowHeight).dp.toPx() }
-                            val candidateRow = homeCellLocal(visualIndex ?: 0) / GRID_COLUMNS
-                            val previewWidth = specialAnchor?.let { with(density) { it.width.toDp() } }
-                                ?: with(density) { (cellWidthPx * session.span.width - 10.dp.toPx()).toDp() }
-                            val previewHeight = specialAnchor?.let { with(density) { it.height.toDp() } }
-                                ?: with(density) { (pickerRowTop(candidateRow + session.span.height) -
-                                    pickerRowTop(candidateRow) - 18.dp.toPx()).coerceAtLeast(48.dp.toPx()).toDp() }
-                            val previewX = if (specialAnchor != null) anchor.left
-                                else anchor.left + with(density) { 5.dp.toPx() }
-                            Surface(Modifier.offset { IntOffset(previewX.roundToInt(), anchor.top.roundToInt()) }
-                                .size(previewWidth, previewHeight).testTag("widget-placement-preview")
-                                .semantics { stateDescription = if (widgetDraft != null) "Ready to place" else "No room here" },
-                                color = if (widgetDraft != null) Glass.copy(alpha = .82f) else Color(0xFFE7B6B6).copy(alpha = .9f),
-                                shape = RoundedCornerShape(24.dp), border = androidx.compose.foundation.BorderStroke(3.dp,
-                                    if (widgetDraft != null) Color.White else Color(0xFFFF6B6B))) {
-                                Box(Modifier.fillMaxSize()) {
-                                    if (sessionEntry != null) WidgetProviderPreview(sessionEntry, session.span,
-                                        Modifier.fillMaxSize().padding(5.dp).clip(RoundedCornerShape(18.dp)))
-                                    else Column(Modifier.align(Alignment.Center).padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(session.provider?.loadLabel(launcherActivity.packageManager)?.toString()
-                                            ?: BUILTIN_WIDGET_NAMES[session.builtinId] ?: "Widget panel", color = Ink,
-                                            textAlign = TextAlign.Center)
-                                        Text("${session.span.width} × ${session.span.height}", color = Ink)
-                                    }
-                                    if (widgetDraft == null) Box(Modifier.matchParentSize()
-                                        .background(Color(0xFFB83B3B).copy(alpha = .34f)), contentAlignment = Alignment.Center) {
-                                        Text("No room here", color = Color.White, fontWeight = FontWeight.SemiBold)
-                                    }
+                        val slotRect = specialAnchor ?: footprint(visualIndex, session.span)
+                        val ready = widgetDraft != null
+                        val floating = session.dragging || session.moving
+                        val previewContent = @Composable {
+                            Box(Modifier.fillMaxSize()) {
+                                if (sessionEntry != null) WidgetProviderPreview(sessionEntry, session.span,
+                                    Modifier.fillMaxSize().padding(5.dp).clip(RoundedCornerShape(18.dp)))
+                                else Column(Modifier.align(Alignment.Center).padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(session.provider?.loadLabel(launcherActivity.packageManager)?.toString()
+                                        ?: BUILTIN_WIDGET_NAMES[session.builtinId] ?: "Widget panel", color = Color.White,
+                                        textAlign = TextAlign.Center)
+                                    Text("${session.span.width} × ${session.span.height}", color = Color.White)
                                 }
                             }
-                        } else if (session.dragging) {
-                            Surface(Modifier.offset { IntOffset((session.pointer.x - 90.dp.toPx()).roundToInt(),
-                                (session.pointer.y - 60.dp.toPx()).roundToInt()) }.size(180.dp, 120.dp)
-                                .testTag("widget-placement-preview").semantics { stateDescription = "No room here" },
-                                color = Color(0xFFE7B6B6).copy(alpha = .9f), shape = RoundedCornerShape(24.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    if (sessionEntry != null) WidgetProviderPreview(sessionEntry, session.span,
-                                        Modifier.fillMaxSize().padding(5.dp).clip(RoundedCornerShape(18.dp)))
-                                    Box(Modifier.matchParentSize().background(Color(0xFFB83B3B).copy(alpha = .34f)),
-                                        contentAlignment = Alignment.Center) { Text("No room here", color = Color.White) }
-                                }
+                        }
+                        // Outline on the grid: exactly the cells the widget will take. White fits; red has no room.
+                        if (slotRect != null) {
+                            val local = slotRect.translate(-overlayOrigin)
+                            Box(Modifier.offset { IntOffset(local.left.roundToInt(), local.top.roundToInt()) }
+                                .size(with(placementDensity) { local.width.toDp() }, with(placementDensity) { local.height.toDp() })
+                                .testTag("widget-placement-preview")
+                                .semantics { stateDescription = if (ready) "Ready to place" else "No room here" }
+                                .background(if (ready) Color.White.copy(alpha = if (floating) .14f else .08f)
+                                    else Color(0xFFB83B3B).copy(alpha = .3f), RoundedCornerShape(24.dp))
+                                .border(2.5.dp, if (ready) Color.White.copy(alpha = .92f) else Color(0xFFFF6B6B), RoundedCornerShape(24.dp))) {
+                                if (!floating) previewContent()
+                                if (!ready) Text("No room here", Modifier.align(Alignment.Center), color = Color.White,
+                                    fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        // While moving, the widget itself follows the finger above the grid.
+                        if (floating) {
+                            val ghostSize = slotRect?.size ?: with(placementDensity) {
+                                androidx.compose.ui.geometry.Size(180.dp.toPx(), 120.dp.toPx())
+                            }
+                            val held = grab ?: Offset(ghostSize.width / 2f, ghostSize.height / 2f)
+                            val topLeft = session.pointer - held - overlayOrigin
+                            Surface(Modifier.offset { IntOffset(topLeft.x.roundToInt(), topLeft.y.roundToInt()) }
+                                .size(with(placementDensity) { ghostSize.width.toDp() }, with(placementDensity) { ghostSize.height.toDp() })
+                                .graphicsLayer { alpha = .9f; scaleX = 1.04f; scaleY = 1.04f }
+                                .shadow(16.dp, RoundedCornerShape(24.dp)).testTag("widget-placement-ghost")
+                                .semantics { stateDescription = if (ready) "Ready to place" else "No room here" },
+                                color = if (ready) Glass.copy(alpha = .7f) else Color(0xFFD64545).copy(alpha = .62f),
+                                shape = RoundedCornerShape(24.dp),
+                                border = if (ready) null else androidx.compose.foundation.BorderStroke(2.5.dp, Color(0xFFFF6B6B))) {
+                                previewContent()
+                                if (!ready) Box(Modifier.fillMaxSize().background(Color(0xFFB83B3B).copy(alpha = .38f)))
                             }
                         }
                     }
@@ -1603,6 +1710,8 @@ private fun HomePagePane(
         while (drag.active) {
             val pointer = drag.pointer
             val amount = when {
+                // Only app and folder drags scroll the page to reach rows below; a dragged widget leaves the page still.
+                drag.source?.widgetId != null -> 0f
                 !paneBounds.contains(pointer) -> 0f
                 pointer.y < paneBounds.top + verticalEdge && homeScroll.canScrollBackward -> -18f
                 pointer.y > paneBounds.bottom - verticalEdge && homeScroll.canScrollForward -> 18f
@@ -1651,8 +1760,8 @@ private fun CircleControl(icon: ImageVector, label: String, tag: String, visualS
             role = androidx.compose.ui.semantics.Role.Button).testTag(tag), contentAlignment = Alignment.Center) {
         val shadow = if (WallpaperStore.state.collectAsState().value.glassShadow) 8.dp else 0.dp
         Box(Modifier.size(visualSize).testTag("$tag-visual").outerShadow(shadow, CircleShape).clip(CircleShape)
-            .indication(interaction, androidx.compose.material3.ripple()).background(Glass.copy(alpha = .22f), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = .25f), CircleShape), contentAlignment = Alignment.Center) {
+            .indication(interaction, androidx.compose.material3.ripple()).glassDepth(CircleShape, Glass.copy(alpha = .22f)),
+            contentAlignment = Alignment.Center) {
             Icon(icon, label, tint = Color.White, modifier = Modifier.size(22.dp))
         }
     }

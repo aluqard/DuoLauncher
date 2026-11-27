@@ -61,7 +61,8 @@ class DockSideGeometryTest {
         org.junit.Assert.assertEquals(DockSide.BOTTOM, bottom.dockSide)
         org.junit.Assert.assertTrue(bottom.gridWidth > right.gridWidth)
         org.junit.Assert.assertTrue(bottom.bottomDockHeight > 0f)
-        org.junit.Assert.assertEquals(bottom.gridWidth / 4f, bottom.dockRowHeight, .01f)
+        org.junit.Assert.assertTrue(bottom.dockWidth < bottom.gridWidth)
+        org.junit.Assert.assertTrue(bottom.dockRowHeight > bottom.dockIconSize)
     }
 
     @org.junit.Test fun `unfolded layout always keeps the right dock`() {

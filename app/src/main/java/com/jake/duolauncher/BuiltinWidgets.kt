@@ -91,8 +91,8 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 internal fun GlassCard(modifier: Modifier = Modifier, onClick: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).clickable(onClick = onClick),
-        color = Glass.copy(alpha = .24f), shape = RoundedCornerShape(24.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .18f))) {
+    Surface(modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).glassDepth(RoundedCornerShape(24.dp), Glass.copy(alpha = .24f))
+        .clickable(onClick = onClick), color = Color.Transparent, shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween, content = content)
     }
 }
@@ -210,8 +210,8 @@ internal fun MovableWidget(id: Int, slot: Int, controller: WidgetController, dra
                 Text("Your widgets", color = Color.White, fontSize = 15.sp, maxLines = 1)
                 Text("Tap to choose", color = Color.White.copy(alpha = .8f), fontSize = 12.sp)
             }
-            else -> Surface(Modifier.fillMaxSize().clickable(onClick = onAdd), color = Glass.copy(alpha = .18f),
-                shape = RoundedCornerShape(24.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .25f))) {
+            else -> Surface(Modifier.fillMaxSize().glassDepth(RoundedCornerShape(24.dp), Glass.copy(alpha = .18f)).clickable(onClick = onAdd),
+                color = Color.Transparent, shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Rounded.Add, null, tint = Color.White)
                     Text(if (id >= 0) "Widget unavailable" else "Add widget", color = Color.White, fontSize = 12.sp)

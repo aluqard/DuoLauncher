@@ -18,6 +18,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.clip
@@ -236,7 +238,7 @@ internal fun FrostedBackdrop(shape: androidx.compose.ui.graphics.Shape, modifier
 
 /** The frosted-glass blur: soft enough to hide detail, with a little extra color so it does not look washed out. */
 @Composable
-internal fun rememberFrostEffect(blur: androidx.compose.ui.unit.Dp = 14.dp): androidx.compose.ui.graphics.RenderEffect {
+internal fun rememberFrostEffect(blur: androidx.compose.ui.unit.Dp = 10.dp): androidx.compose.ui.graphics.RenderEffect {
     val density = LocalDensity.current
     return remember(blur, density) {
         val radius = with(density) { blur.toPx() }
@@ -258,7 +260,7 @@ internal fun GlassPanel(shape: androidx.compose.ui.graphics.Shape, tint: Color,
     content: @Composable BoxScope.() -> Unit) {
     Box(modifier.pointerInput(Unit) { }) {
         if (scene != null) FrostedBackdrop(shape, Modifier.matchParentSize(), drawScene = scene)
-        Box(Modifier.matchParentSize().background(tint, shape).border(1.dp, Color.White.copy(alpha = .34f), shape))
+        Box(Modifier.matchParentSize().glassDepth(shape, tint))
         Box(Modifier.fillMaxSize().clip(shape), content = content)
     }
 }
@@ -266,16 +268,17 @@ internal fun GlassPanel(shape: androidx.compose.ui.graphics.Shape, tint: Color,
 /**
  * For a layer that reaches [end] px past its visible width [visible]: clips to [visible] while pages rest, but
  * while they move lets them run on under the side dock. [reveal] (0..1) slides a soft edge outward to the full
- * width, so pages pass the edge without a seam, and [frost] (when given) blurs the patch under the dock's glass.
+ * width, so pages pass the edge without a seam, and [frost] (when given) blurs the patch under the dock's glass
+ * while they move, or whenever [frostAtRest] says content rests under it (a bottom dock over All apps).
  * At rest nothing is drawn or touchable past [visible].
  */
 internal fun Modifier.revealPastEnd(visible: Float, end: Float, frost: androidx.compose.ui.graphics.RenderEffect?,
-    reveal: () -> Float): Modifier =
+    frostAtRest: () -> Boolean = { false }, reveal: () -> Float): Modifier =
     graphicsLayer {
         val moving = end > 0f && reveal() > 0f
         clip = true
         shape = if (moving) androidx.compose.ui.graphics.RectangleShape else LeadingWidthShape(visible)
-        renderEffect = if (moving) frost else null
+        renderEffect = if (frost != null && (moving || frostAtRest())) frost else null
     }.drawWithContent {
         clipRect(right = visible) { this@drawWithContent.drawContent() }
         val shown = if (end > 0f) reveal() else 0f
@@ -327,3 +330,48 @@ internal fun frostPatchEffect(patch: Rect, corner: Float, blur: Float): androidx
     return android.graphics.RenderEffect.createBlendModeEffect(outside, inside, android.graphics.BlendMode.SRC_OVER)
         .asComposeRenderEffect()
 }
+
+/**
+ * Home's search control above a bottom dock: a small glass pill. Tap searches apps; touch and hold searches
+ * Google. The touch target is 48dp tall around the 36dp pill.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+internal fun SearchPill(shadow: androidx.compose.ui.unit.Dp, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier) {
+    val shape = RoundedCornerShape(50)
+    val interaction = remember { MutableInteractionSource() }
+    Box(modifier.heightIn(min = 48.dp)
+        .combinedClickable(interaction, null, onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "Search Google",
+            role = androidx.compose.ui.semantics.Role.Button)
+        .semantics(mergeDescendants = true) { contentDescription = "Search apps" }.testTag("search"),
+        contentAlignment = Alignment.Center) {
+        Row(Modifier.height(36.dp).outerShadow(shadow, shape).clip(shape)
+            .indication(interaction, ripple()).glassDepth(shape, Glass.copy(alpha = .22f))
+            .padding(horizontal = 14.dp).testTag("search-visual"),
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Search, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Search", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+/** How much of each glass tint is kept: lower lets more of the wallpaper show through. */
+const val GLASS_CLARITY = .6f
+
+/**
+ * Glass with depth: the tint brightens toward the top and settles a little darker at the bottom, and the rim
+ * catches light at the top-left and bottom-right corners, fading along the sides. [clarity] scales the tint;
+ * panels that hold text over busy wallpaper can keep it at 1.
+ */
+internal fun Modifier.glassDepth(shape: androidx.compose.ui.graphics.Shape, tint: Color, rim: Float = .62f,
+    clarity: Float = GLASS_CLARITY): Modifier = this
+    .background(tint.copy(alpha = tint.alpha * clarity), shape)
+    .background(androidx.compose.ui.graphics.Brush.verticalGradient(0f to Color.White.copy(alpha = .10f),
+        .45f to Color.White.copy(alpha = .02f), 1f to Color.Black.copy(alpha = .10f)), shape)
+    .border(BorderStroke(1.5.dp, glassRim(rim)), shape)
+
+/** The glass rim's light: brightest at the top-left corner, faint along the sides, bright again bottom-right. */
+internal fun glassRim(strength: Float): androidx.compose.ui.graphics.Brush = androidx.compose.ui.graphics.Brush.linearGradient(
+    0f to Color.White.copy(alpha = strength), .3f to Color.White.copy(alpha = strength * .3f),
+    .7f to Color.White.copy(alpha = strength * .3f), 1f to Color.White.copy(alpha = strength * .75f))

@@ -24,10 +24,12 @@ class LayoutModelTest {
         assertEquals(g.homeWidth - 95f - 44f, g.gridWidth, .01f)
         // A narrow column shrinks its icons rather than overflowing the glass.
         assertEquals(56f, homeGeometry(851f, 850f, LayoutPreset(dockWidth = 56f), true).dockIconSize, .01f)
-        // A bottom dock has no side bar and keeps its smaller icons.
+        // A bottom dock keeps its smaller icons, and its glass hugs them with the same edge all round.
         val bottom = homeGeometry(400f, 850f, LayoutPreset(dockSide = DockSide.BOTTOM), true)
-        assertEquals(0f, bottom.dockWidth, .01f)
         assertEquals(dockIconSize(bottom.iconSize), bottom.dockIconSize, .01f)
+        val sideEdge = (bottom.dockWidth - (3f * bottom.dockRowHeight + bottom.dockIconSize)) / 2f
+        assertEquals((bottom.bottomDockHeight - bottom.dockIconSize) / 2f, sideEdge, .01f)
+        assertTrue(bottom.dockWidth < bottom.gridWidth)
     }
     @Test fun `manual dock mode keeps saved position and alignment does not overwrite it`() {
         val p = LayoutPreset(dockPosition = .43f, dockAlignToGrid = false)

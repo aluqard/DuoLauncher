@@ -173,7 +173,16 @@ internal fun WallpaperAppearancePage(state: LauncherState, model: LauncherModel,
         }
         if (backgrounds.photoSelected && !backgrounds.previewPending) {
             GroupDivider()
-            GroupRow("Use Duo dunes", "background-reset", action = true, onClick = backgrounds::reset)
+            GroupRow("Remove photo", "background-reset", action = true, onClick = backgrounds::reset)
+        }
+        // Built-in scenes, shown whenever no photo is chosen; picking one also removes a chosen photo.
+        BuiltInScene.entries.forEach { scene ->
+            GroupDivider()
+            GroupRow(scene.label, "background-scene-${scene.name.lowercase()}",
+                checked = !backgrounds.photoSelected && settings.scene == scene, enabled = !backgrounds.previewPending) {
+                WallpaperStore.update(context) { it.copy(scene = scene) }
+                if (backgrounds.photoSelected) backgrounds.reset()
+            }
         }
         if (device.foldable) {
             GroupDivider()
@@ -198,7 +207,7 @@ internal fun WallpaperAppearancePage(state: LauncherState, model: LauncherModel,
         TextButton(onClick = { backgrounds.clearMessage(); coverMessage = null }, Modifier.fillMaxWidth().testTag("background-message")) { Text(message) }
     }
     GroupFooter(if (device.foldable && settings.coverPhoto) "The folded screen shows its own photo; the unfolded screen keeps the main one."
-        else "The photo behind the launcher Home Screen.")
+        else "A photo of your own, or a built-in scene, behind the launcher Home Screen.")
 
     GroupHeader("App icons")
     SettingsGroup {

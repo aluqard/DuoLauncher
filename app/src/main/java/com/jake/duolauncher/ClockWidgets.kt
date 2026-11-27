@@ -83,11 +83,11 @@ internal fun AnalogClockCard(onClick: () -> Unit) {
     val millis = rememberClockMillis(visible)
     val accent = Color(ThemeStore.state.collectAsState().value.accent())
     val time = LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
-    Surface(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).clickable(onClick = onClick)
+    Surface(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).glassDepth(RoundedCornerShape(24.dp), Glass.copy(alpha = .24f))
+        .clickable(onClick = onClick)
         .trackVisibility { visible = it }
         .semantics { contentDescription = "Analog clock, ${time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))}" },
-        color = Glass.copy(alpha = .24f), shape = RoundedCornerShape(24.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .18f))) {
+        color = Color.Transparent, shape = RoundedCornerShape(24.dp)) {
         Canvas(Modifier.fillMaxSize().padding(10.dp)) {
             val angles = clockHandAngles(time.hour, time.minute, time.second, (millis % 1000).toInt())
             drawDial(angles, accent)

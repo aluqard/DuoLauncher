@@ -104,6 +104,7 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
                     LibraryModeSetting()
                     BadgeSettings()
                     HiddenAppSettings(state.extras.hiddenApps.size)
+                    DiscoverSwipeSettingRow()
                     Text("Swipe sideways anywhere on Home to change pages. Swipe down for notifications or quick settings.",
                         style = MaterialTheme.typography.bodyMedium)
                 }
@@ -156,7 +157,7 @@ private fun LauncherHelp(
         Text("Set up shade gestures")
     }
     HelpSection(Icons.Rounded.Explore, "Discover",
-        "Swipe right from the first Home page. If Google can’t provide the feed, Duo keeps a Home return and recovery actions available.")
+        "Turn on Swipe right for Discover in Gestures & search, then swipe right from the first Home page. If Google can’t provide the feed, Duo keeps a Home return and recovery actions available.")
 }
 
 @Composable
@@ -266,6 +267,15 @@ private fun HelpSection(icon: ImageVector, title: String, detail: String) {
     range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     Column { Row { Text(label, Modifier.weight(1f)); Text(valueLabel, color = MaterialTheme.colorScheme.primary) }
         Slider(value, onChange, valueRange = range, modifier = Modifier.semantics { contentDescription = label }) }
+}
+
+@Composable private fun DiscoverSwipeSettingRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val on by DiscoverSwipeSetting.enabled(context).collectAsState()
+    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+    SettingsSwitch("Swipe right for Discover", on, { DiscoverSwipeSetting.set(context, it) }, "discover-swipe-switch")
+    Text("On: swiping right from the first Home page opens the Google Discover feed. Off: Home stops at its first page.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable private fun LibraryModeSetting() {

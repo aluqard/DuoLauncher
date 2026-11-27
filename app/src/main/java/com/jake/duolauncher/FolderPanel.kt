@@ -52,9 +52,8 @@ internal fun FolderPanel(
                 indication = null,
                 onClick = {},
             )
-            .testTag("folder-panel-content"),
-            color = Glass.copy(alpha = .97f), shape = RoundedCornerShape(30.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .6f))) {
+            .testTag("folder-panel-content").glassDepth(RoundedCornerShape(30.dp), Glass.copy(alpha = .97f), rim = .75f, clarity = 1f),
+            color = Color.Transparent, shape = RoundedCornerShape(30.dp)) {
             Column(Modifier.padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(title, { title = it }, Modifier.weight(1f).testTag("folder-name"),

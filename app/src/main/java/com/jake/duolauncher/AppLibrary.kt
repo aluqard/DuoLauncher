@@ -61,6 +61,8 @@ internal fun AppLibrary(
     drag: HomeDragState? = null, page: Int? = null,
     onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit = { app, _ -> onLaunch(app) },
     onTurnOnWork: (Long) -> Unit = {},
+    /** Room at the end of the lists for a bottom dock they scroll behind. */
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val glass = !editing
     val palette = LocalDuoPalette.current
@@ -105,7 +107,7 @@ internal fun AppLibrary(
 
     if (!editing && categoriesMode) {
         CategoryLibrary(state, query, onQuery, visibleApps, groups, hiddenApps, revealHidden, toggleHidden, workPaused,
-            pinned, drag, page, listState, onPin, onLaunchFrom, onActions, onTurnOnWork, workChips, modifier)
+            pinned, drag, page, listState, onPin, onLaunchFrom, onActions, onTurnOnWork, workChips, modifier, bottomInset)
         return
     }
 
@@ -135,7 +137,7 @@ internal fun AppLibrary(
                 ) else OutlinedTextFieldDefaults.colors())
             val letterChip = if (glass) (if (palette.dark) Color(0xFF314852) else Color(0xFFB7CBD3)) else MaterialTheme.colorScheme.surfaceContainer
             LazyColumn(Modifier.weight(1f).testTag("all-apps-list"), state = listState,
-                contentPadding = PaddingValues(bottom = 12.dp)) {
+                contentPadding = PaddingValues(bottom = 12.dp + bottomInset)) {
                 libraryEntries(groups, workPaused, onTurnOnWork, if (state.loading) "Loading apps…" else "No apps found",
                     letterChip = letterChip,
                     letterInk = ink, divider = glass,
@@ -198,6 +200,7 @@ private fun CategoryLibrary(
     listState: androidx.compose.foundation.lazy.LazyListState,
     onPin: (String, Boolean) -> Unit, onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit,
     onActions: (AppEntry) -> Unit, onTurnOnWork: (Long) -> Unit, workChips: @Composable () -> Unit, modifier: Modifier,
+    bottomInset: androidx.compose.ui.unit.Dp,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -227,7 +230,7 @@ private fun CategoryLibrary(
             when {
                 searching || workPaused != null -> LazyColumn(Modifier.weight(1f).fillMaxWidth()
                     .background(Color.Black.copy(alpha = .34f), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp)
-                    .testTag("all-apps-list"), state = listState, contentPadding = PaddingValues(bottom = 12.dp)) {
+                    .testTag("all-apps-list"), state = listState, contentPadding = PaddingValues(bottom = 12.dp + bottomInset)) {
                     // Revealed from the grid: only the hidden apps, so they are not buried at the end of the list.
                     val onlyHidden = revealHidden && !focused && query.isEmpty() && workPaused == null
                     if (onlyHidden) {
@@ -242,10 +245,11 @@ private fun CategoryLibrary(
                     ) { app, hiddenEntry -> LibraryRow(app, pinned, false, if (hiddenEntry) null else drag, page, onPin, onLaunchFrom, onActions, hiddenEntry) }
                     }
                 }
-                open != null -> CategoryContents(open, drag, page, onLaunchFrom, onActions, { openCategory = null }, Modifier.weight(1f))
+                open != null -> CategoryContents(open, drag, page, onLaunchFrom, onActions, { openCategory = null },
+                    Modifier.weight(1f).padding(bottom = bottomInset))
                 else -> LazyVerticalGrid(GridCells.Adaptive(140.dp), Modifier.weight(1f).testTag("library-categories"),
                     horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(bottom = 12.dp)) {
+                    contentPadding = PaddingValues(bottom = 12.dp + bottomInset)) {
                     items(libraryGroups.size, key = { libraryGroups[it].key }) { index ->
                         CategoryTile(libraryGroups[index], drag, page, onLaunchFrom, onActions, { openCategory = libraryGroups[index].key })
                     }
@@ -268,8 +272,7 @@ private fun LibrarySearchPill(query: String, onQuery: (String) -> Unit, active: 
         .testTag(tag), singleLine = true,
         textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Color.White),
         decorationBox = { field ->
-            Row(Modifier.fillMaxSize().background(Color.White.copy(alpha = .14f), CircleShape)
-                .border(1.dp, Color.White.copy(alpha = .4f), CircleShape).padding(horizontal = 16.dp),
+            Row(Modifier.fillMaxSize().glassDepth(CircleShape, Color.White.copy(alpha = .14f)).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (active) Arrangement.Start else Arrangement.Center) {
                 Icon(Icons.Rounded.Search, null, Modifier.size(18.dp), tint = Color.White.copy(alpha = .85f))
@@ -349,9 +352,9 @@ private fun CategoryTile(group: LibraryGroup<AppEntry>, drag: HomeDragState?, pa
     onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit, onActions: (AppEntry) -> Unit, onOpen: () -> Unit) {
     val (large, preview) = categoryTileSlots(group.apps)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp)).clickable(onClick = onOpen)
-            .testTag("library-group-${group.key}"), shape = RoundedCornerShape(24.dp),
-            color = Color.White.copy(alpha = .16f), border = BorderStroke(1.dp, Color.White.copy(alpha = .34f))) {
+        Surface(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp))
+            .glassDepth(RoundedCornerShape(24.dp), Color.White.copy(alpha = .16f)).clickable(onClick = onOpen)
+            .testTag("library-group-${group.key}"), shape = RoundedCornerShape(24.dp), color = Color.Transparent) {
             BoxWithConstraints(Modifier.padding(8.dp)) {
                 val cell = maxWidth / 2
                 val icon = cell * .76f
@@ -406,8 +409,7 @@ private fun LibraryIcon(app: AppEntry, size: Dp, drag: HomeDragState?, page: Int
 @Composable
 private fun CategoryContents(group: LibraryGroup<AppEntry>, drag: HomeDragState?, page: Int?,
     onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit, onActions: (AppEntry) -> Unit, onBack: () -> Unit, modifier: Modifier) {
-    Column(modifier.fillMaxWidth().background(Color.White.copy(alpha = .14f), RoundedCornerShape(24.dp))
-        .border(1.dp, Color.White.copy(alpha = .3f), RoundedCornerShape(24.dp)).padding(12.dp)) {
+    Column(modifier.fillMaxWidth().glassDepth(RoundedCornerShape(24.dp), Color.White.copy(alpha = .14f)).padding(12.dp)) {
         TextButton(onBack, Modifier.testTag("library-category-back"), colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
             Icon(Icons.Rounded.ChevronLeft, null); Spacer(Modifier.width(6.dp))
             Text(group.title, style = MaterialTheme.typography.titleMedium)

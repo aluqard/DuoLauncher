@@ -6,13 +6,17 @@ import org.junit.Test
 
 class WallpaperSettingsTest {
     @Test fun `settings survive a round trip and default sensibly`() {
-        val custom = WallpaperSettings(coverPhoto = true, motion = false, glassShadow = true, device = DeviceFit.FOLD8)
+        val custom = WallpaperSettings(coverPhoto = true, motion = false, glassShadow = true, device = DeviceFit.FOLD8,
+            scene = BuiltInScene.DUNES)
         assertEquals(custom, decodeWallpaperSettings(encodeWallpaperSettings(custom)))
         assertEquals(WallpaperSettings(), decodeWallpaperSettings(null))
         assertEquals(WallpaperSettings(), decodeWallpaperSettings("not json"))
         // Motion is on unless turned off; an unknown device falls back to detection.
         assertEquals(true, decodeWallpaperSettings("{}").motion)
         assertNull(decodeWallpaperSettings("{\"device\":\"PIXEL_FOLD_99\"}").device)
+        // Without a saved scene, or with an unknown one, the starry night is shown.
+        assertEquals(BuiltInScene.NIGHT, decodeWallpaperSettings("{}").scene)
+        assertEquals(BuiltInScene.NIGHT, decodeWallpaperSettings("{\"scene\":\"MOON\"}").scene)
     }
 
     @Test fun `device detection uses model codes then the hinge`() {

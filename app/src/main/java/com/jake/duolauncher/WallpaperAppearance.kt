@@ -50,6 +50,9 @@ internal fun detectDeviceFit(manufacturer: String, model: String, hasHinge: Bool
     else -> DeviceFit.PHONE
 }
 
+/** Built-in backgrounds shown when no photo is chosen. */
+enum class BuiltInScene(val label: String) { NIGHT("Starry night"), DUNES("Duo dunes") }
+
 data class WallpaperSettings(
     /** Show a separate photo on the folded (cover) screen. */
     val coverPhoto: Boolean = false,
@@ -59,16 +62,20 @@ data class WallpaperSettings(
     val glassShadow: Boolean = false,
     /** Chosen device, or null to use [detectDeviceFit]. */
     val device: DeviceFit? = null,
+    /** Background drawn when no photo is chosen. */
+    val scene: BuiltInScene = BuiltInScene.NIGHT,
 )
 
 internal fun encodeWallpaperSettings(s: WallpaperSettings): String = JSONObject().put("coverPhoto", s.coverPhoto)
-    .put("motion", s.motion).put("glassShadow", s.glassShadow).put("device", s.device?.name ?: JSONObject.NULL).toString()
+    .put("motion", s.motion).put("glassShadow", s.glassShadow).put("device", s.device?.name ?: JSONObject.NULL)
+    .put("scene", s.scene.name).toString()
 
 internal fun decodeWallpaperSettings(raw: String?): WallpaperSettings = runCatching {
     if (raw.isNullOrBlank()) return WallpaperSettings()
     val j = JSONObject(raw)
     WallpaperSettings(j.optBoolean("coverPhoto", false), j.optBoolean("motion", true), j.optBoolean("glassShadow", false),
-        if (j.isNull("device")) null else DeviceFit.entries.firstOrNull { it.name == j.optString("device") })
+        if (j.isNull("device")) null else DeviceFit.entries.firstOrNull { it.name == j.optString("device") },
+        BuiltInScene.entries.firstOrNull { it.name == j.optString("scene") } ?: BuiltInScene.NIGHT)
 }.getOrDefault(WallpaperSettings())
 
 object WallpaperStore {

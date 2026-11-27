@@ -96,7 +96,7 @@ internal fun FolderTile(folder: FolderEntry, apps: Map<String, AppEntry>, size: 
         contentDescription = "Folder ${folder.title}, ${folder.appIds.size} apps"
     }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(size.dp).clip(RoundedCornerShape((size * .24f).dp))
-            .background(Glass.copy(alpha = .72f)).border(1.dp, Color.White.copy(alpha = .55f), RoundedCornerShape((size * .24f).dp))
+            .glassDepth(RoundedCornerShape((size * .24f).dp), Glass.copy(alpha = .72f))
             .dropRegion(drag, DropTarget.Folder(folder.id), page = page, folderId = folder.id)
             .testTag("folder-drop-${folder.id}")) {
             folder.appIds.take(4).forEachIndexed { index, id ->

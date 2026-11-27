@@ -78,6 +78,8 @@ internal data class WidgetPickerSession(
     val targetIndex: Int? = null,
     val candidate: WidgetPlacement? = null,
     val builtinId: Int? = null,
+    /** The placed preview is being dragged across the grid (after choosing, not from the picker). */
+    val moving: Boolean = false,
 )
 
 internal fun widgetCatalog(context: Context, providers: List<AppWidgetProviderInfo>, profile: AppProfile): List<WidgetCatalogEntry> {
