@@ -349,7 +349,8 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
     val backgroundPhoto = remember(backgroundRevision) {
         LauncherBackgroundCache.bitmap?.takeUnless { it.isRecycled }?.asImageBitmap()
     }
-    DiscoverMotion.pageWidth = (fullWidth - preset.dockWidth - 28f) * density.density
+    val dockBar = sideDockBarWidth(preset.dockWidth)
+    DiscoverMotion.pageWidth = (fullWidth - dockBar - 28f) * density.density
     Box(Modifier.fillMaxSize().testTag("discover-chrome").semantics { testTagsAsResourceId = true }) {
         Canvas(Modifier.fillMaxSize()) {
             val offset = fullSize.width - size.width
@@ -363,7 +364,7 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
             }
         }
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            if (DiscoverBounds.available) Box(Modifier.fillMaxHeight().width((fullWidth - preset.dockWidth - 28).dp)
+            if (DiscoverBounds.available) Box(Modifier.fillMaxHeight().width((fullWidth - dockBar - 28).dp)
                 .padding(start = 16.dp, top = 16.dp, bottom = 16.dp).onGloballyPositioned {
                     val outer = it.boundsInWindow()
                     val padding = 16 * density.density
@@ -388,30 +389,37 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
                 homeBottomSpace = if (context.getSystemService(android.app.role.RoleManager::class.java)
                     .isRoleHeld(android.app.role.RoleManager.ROLE_HOME)) 44f else 88f)
             if (state.verticalStatus) StatusRail(status, Modifier.align(Alignment.TopEnd).padding(end = 12.dp)
-                .offset(y = geometry.contentTop.dp).width(preset.dockWidth.dp)
+                .offset(y = geometry.contentTop.dp).width(dockBar.dp)
                 .onSizeChanged {
                     // The normal rail's 20dp location slot and 3dp gap do not move the dock.
                     statusHeight = (it.height / density.density -
                         if (maxHeight < 500.dp) 0f else 23f).coerceAtLeast(0f)
                 },
                 compact = maxHeight < 500.dp, iconSize = dockIconSize(geometry.iconSize).dp)
-            Surface(Modifier.align(Alignment.TopEnd).padding(end = 12.dp).offset(y = geometry.dockTop.dp)
-                .width(preset.dockWidth.dp).height(geometry.dockHeight.dp).testTag("discover-dock"),
-                shape = RoundedCornerShape(30.dp), color = Glass.copy(alpha = .32f), border = BorderStroke(1.dp, Color.White.copy(alpha = .3f))) {
-                Column(Modifier.padding(vertical = 8.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+            // Same frosted glass as Home's dock, over this window's slice of the full-screen wallpaper.
+            val viewportLeft = with(density) { (fullSize.width - maxWidth.toPx()).coerceAtLeast(0f) }
+            GlassPanel(RoundedCornerShape(30.dp), Glass.copy(alpha = .32f), {
+                translate(left = -viewportLeft) {
+                    androidx.compose.ui.graphics.drawscope.CanvasDrawScope().draw(density, layoutDirection, drawContext.canvas, fullSize) {
+                        drawLauncherBackground(backgroundPhoto, DuoAppearanceRuntime.dark)
+                    }
+                }
+            }, Modifier.align(Alignment.TopEnd).padding(end = 12.dp).offset(y = geometry.dockTop.dp)
+                .width(dockBar.dp).height(geometry.dockHeight.dp).testTag("discover-dock")) {
+                Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                     state.dock.forEachIndexed { index, id ->
                         val app = apps[id]
                         Box(Modifier.fillMaxWidth().height(geometry.dockRowHeight.dp).testTag("discover-dock-slot-$index")
                             .semantics { contentDescription = app?.label ?: "Choose dock app on home" }
                             .clickable(role = Role.Button) { if (app != null) onLaunch(app) else onHome() }, contentAlignment = Alignment.Center) {
                             if (app != null) Image(app.icon.asImageBitmap(), null,
-                                Modifier.size(dockIconSize(geometry.iconSize).dp).clip(LocalIconShape.current))
+                                Modifier.size(geometry.dockIconSize.dp).clip(LocalIconShape.current))
                             else Icon(Icons.Rounded.Home, null, tint = Color.White)
                         }
                     }
                 }
             }
-            Column(Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp).width(preset.dockWidth.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp).width(dockBar.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 // Home is physically to the right of Discover, matching our fixed page order.
                 FilledTonalIconButton(onClick = onHome, Modifier.testTag("discover-home")) { Icon(Icons.Rounded.ArrowForward, "Back to home") }
                 Spacer(Modifier.height(8.dp))

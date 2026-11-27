@@ -5,6 +5,12 @@ fun dockIconSize(homeIconSize: Float) = homeIconSize * (76f / 106f)
 
 const val AUTO_TOP_MARGIN = -1f
 
+/** Glass around a side dock's icon column: the saved dock width is the column, the bar is this much wider. */
+const val SIDE_DOCK_EDGE = 27f
+
+/** Width of a side dock's glass bar for a saved dock width. */
+fun sideDockBarWidth(dockWidth: Float) = dockWidth + SIDE_DOCK_EDGE
+
 data class LayoutPreset(
     val iconSize: Float = 66f,
     val rowGap: Float = 8f,
@@ -39,6 +45,10 @@ data class HomeGeometry(
     val dockSide: DockSide = DockSide.RIGHT,
     /** Height of a bottom dock bar; 0 for side docks. */
     val bottomDockHeight: Float = 0f,
+    /** Width of a side dock's glass bar; 0 for a bottom dock. */
+    val dockWidth: Float = 0f,
+    /** Size of the dock's app icons. */
+    val dockIconSize: Float = 0f,
 )
 
 /** The dock edge actually used: side docks other than RIGHT apply to the folded/phone layout only. */
@@ -60,7 +70,8 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val expanded = width >= 650f
     val homeWidth = if (expanded) minOf(460f, width * 0.56f) else width
     val side = effectiveDockSide(p, expanded)
-    val gridWidth = (homeWidth - (if (side == DockSide.BOTTOM) 0f else p.dockWidth) - 44f).coerceAtLeast(192f)
+    val dockBar = if (side == DockSide.BOTTOM) 0f else sideDockBarWidth(p.dockWidth)
+    val gridWidth = (homeWidth - dockBar - 44f).coerceAtLeast(192f)
     val icon = minOf(p.iconSize, (gridWidth / 4f - 10f).coerceAtLeast(32f))
     // Keep the same icon rhythm when labels are hidden; allow larger system text to fit.
     val row = maxOf(48f, icon + if (labels) maxOf(20f, labelHeight) else 20f) + p.rowGap
@@ -73,18 +84,22 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     // Extremely short windows still scroll rather than reduce touch targets below 48dp.
     val topLimit = maxOf(8f, statusHeight)
     val bottomReserve = if (inLibrary) 12f else 124f
-    // Outer dock edges span the first through third icon images, excluding the last label.
-    val desiredHeight = if (p.dockAlignToGrid) 2f * row + icon else 256f
+    // A side dock holds four home-size icons, one slot per app row.
+    val desiredHeight = 4f * row
     val dockHeight = minOf(desiredHeight, (height - topLimit - bottomReserve).coerceAtLeast(76f))
-    val dockRowHeight = if (side == DockSide.BOTTOM) (gridWidth / 4f).coerceAtLeast(48f) else ((dockHeight - 16f) / 4f).coerceAtLeast(48f)
+    val dockRowHeight = if (side == DockSide.BOTTOM) (gridWidth / 4f).coerceAtLeast(48f) else (dockHeight / 4f).coerceIn(48f, maxOf(48f, row))
+    val dockIcon = if (side == DockSide.BOTTOM) dockIconSize(icon) else minOf(icon, p.dockWidth, dockRowHeight - 6f)
+    // Slots center their icons, so an aligned dock starts that far above the first app row and each
+    // dock icon lines up with an app row's icon.
+    val slotInset = (dockRowHeight - dockIcon) / 2f
     // Use the home position as the anchor, so removing library buttons does not
     // move a low-positioned dock on ordinary page swipes. Move up only to fit.
     val homeDockHeight = minOf(desiredHeight, (height - topLimit - 124f).coerceAtLeast(76f))
-    val homeDockTop = (if (p.dockAlignToGrid) contentTop + widget + 18f else height * p.dockPosition - homeDockHeight / 2f)
+    val homeDockTop = (if (p.dockAlignToGrid) contentTop + widget + 18f - slotInset else height * p.dockPosition - homeDockHeight / 2f)
         .coerceIn(topLimit, maxOf(topLimit, height - homeDockHeight - 124f))
     val dockTop = homeDockTop.coerceIn(topLimit, maxOf(topLimit, height - dockHeight - bottomReserve))
     return HomeGeometry(expanded, homeWidth, gridWidth, icon, row, widget, contentTop, dockTop, dockHeight, dockRowHeight,
-        side, bottomDock)
+        side, bottomDock, dockBar, dockIcon)
 }
 
 /** Keep stored order stable across installs, removals and configuration changes. */

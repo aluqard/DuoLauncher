@@ -37,6 +37,6 @@ internal fun Modifier.discoverSwipe(enabled: Boolean, onOpen: () -> Unit): Modif
     return nestedScroll(connection)
 }
 
-/** Reserve the saved dock width plus its surrounding wallpaper, at any display density. */
+/** Reserve the dock's glass bar for the saved dock width plus its surrounding wallpaper, at any display density. */
 internal fun discoverDockFraction(widthDp: Float, dockWidthDp: Float): Float =
-    ((dockWidthDp.coerceIn(56f, 84f) + 28f) / widthDp.coerceAtLeast(1f)).coerceIn(.05f, .45f)
+    ((sideDockBarWidth(dockWidthDp.coerceIn(56f, 84f)) + 28f) / widthDp.coerceAtLeast(1f)).coerceIn(.05f, .45f)

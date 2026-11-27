@@ -18,6 +18,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.asAndroidPath
@@ -208,3 +218,112 @@ internal fun Modifier.outerShadow(elevation: androidx.compose.ui.unit.Dp, shape:
             }
         }
     }
+
+/**
+ * Frosted glass: a blurred, slightly richer copy of what lies behind this element, clipped to [shape].
+ * [drawScene] paints the scene behind in root coordinates (the wallpaper, and Home's pages where they pass
+ * underneath), so whatever moves behind the glass shows through it softly.
+ */
+@Composable
+internal fun FrostedBackdrop(shape: androidx.compose.ui.graphics.Shape, modifier: Modifier = Modifier,
+    drawScene: androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit) {
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    val effect = rememberFrostEffect()
+    Box(modifier.onGloballyPositioned { origin = it.positionInRoot() }
+        .graphicsLayer { renderEffect = effect; this.shape = shape; clip = true }
+        .drawBehind { translate(-origin.x, -origin.y) { drawScene() } })
+}
+
+/** The frosted-glass blur: soft enough to hide detail, with a little extra color so it does not look washed out. */
+@Composable
+internal fun rememberFrostEffect(blur: androidx.compose.ui.unit.Dp = 14.dp): androidx.compose.ui.graphics.RenderEffect {
+    val density = LocalDensity.current
+    return remember(blur, density) {
+        val radius = with(density) { blur.toPx() }
+        val saturate = android.graphics.ColorMatrix().apply { setSaturation(1.3f) }
+        android.graphics.RenderEffect.createChainEffect(
+            android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(saturate)),
+            android.graphics.RenderEffect.createBlurEffect(radius, radius, android.graphics.Shader.TileMode.CLAMP),
+        ).asComposeRenderEffect()
+    }
+}
+
+/**
+ * A glass panel: frosted backdrop (when [scene] is given), the theme's glass tint and a light rim, with
+ * [content] clipped to [shape]. Touches on the panel never reach what is behind it.
+ */
+@Composable
+internal fun GlassPanel(shape: androidx.compose.ui.graphics.Shape, tint: Color,
+    scene: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)?, modifier: Modifier,
+    content: @Composable BoxScope.() -> Unit) {
+    Box(modifier.pointerInput(Unit) { }) {
+        if (scene != null) FrostedBackdrop(shape, Modifier.matchParentSize(), drawScene = scene)
+        Box(Modifier.matchParentSize().background(tint, shape).border(1.dp, Color.White.copy(alpha = .34f), shape))
+        Box(Modifier.fillMaxSize().clip(shape), content = content)
+    }
+}
+
+/**
+ * For a layer that reaches [end] px past its visible width [visible]: clips to [visible] while pages rest, but
+ * while they move lets them run on under the side dock. [reveal] (0..1) slides a soft edge outward to the full
+ * width, so pages pass the edge without a seam, and [frost] (when given) blurs the patch under the dock's glass.
+ * At rest nothing is drawn or touchable past [visible].
+ */
+internal fun Modifier.revealPastEnd(visible: Float, end: Float, frost: androidx.compose.ui.graphics.RenderEffect?,
+    reveal: () -> Float): Modifier =
+    graphicsLayer {
+        val moving = end > 0f && reveal() > 0f
+        clip = true
+        shape = if (moving) androidx.compose.ui.graphics.RectangleShape else LeadingWidthShape(visible)
+        renderEffect = if (moving) frost else null
+    }.drawWithContent {
+        clipRect(right = visible) { this@drawWithContent.drawContent() }
+        val shown = if (end > 0f) reveal() else 0f
+        if (shown > 0f) {
+            val edge = visible + end * shown
+            val soft = 24.dp.toPx()
+            val canvas = drawContext.canvas
+            val area = Rect(visible, 0f, visible + end, size.height)
+            canvas.saveLayer(area, androidx.compose.ui.graphics.Paint())
+            clipRect(left = area.left, right = area.right) { this@drawWithContent.drawContent() }
+            drawRect(androidx.compose.ui.graphics.Brush.horizontalGradient(
+                0f to Color.Black, 1f to Color.Transparent, startX = edge - soft, endX = edge),
+                topLeft = area.topLeft, size = area.size, blendMode = androidx.compose.ui.graphics.BlendMode.DstIn)
+            canvas.restore()
+        }
+    }
+
+/** A layer outline covering only the first [width] px. */
+private data class LeadingWidthShape(val width: Float) : androidx.compose.ui.graphics.Shape {
+    override fun createOutline(size: Size, layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density) =
+        androidx.compose.ui.graphics.Outline.Rectangle(Rect(0f, 0f, minOf(width, size.width), size.height))
+}
+
+/** How far moving pages show past the edge: reaches all the way early in a swipe and recedes as it settles. */
+internal fun pastEndReveal(offsetFraction: Float): Float = (abs(offsetFraction) / .12f).coerceIn(0f, 1f)
+
+/**
+ * Frosts one rounded patch of a layer: inside [patch] (layer pixels) the content is blurred like
+ * [rememberFrostEffect], outside it is left as is. Lets pages passing under the side dock show through its glass
+ * without drawing them twice.
+ */
+internal fun frostPatchEffect(patch: Rect, corner: Float, blur: Float): androidx.compose.ui.graphics.RenderEffect? {
+    val width = patch.width.roundToInt()
+    val height = patch.height.roundToInt()
+    if (width <= 0 || height <= 0) return null
+    val mask = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ALPHA_8)
+    android.graphics.Canvas(mask).drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), corner, corner,
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG))
+    val shader = android.graphics.BitmapShader(mask, android.graphics.Shader.TileMode.DECAL, android.graphics.Shader.TileMode.DECAL)
+        .apply { setLocalMatrix(android.graphics.Matrix().apply { setTranslate(patch.left, patch.top) }) }
+    val inPatch = android.graphics.RenderEffect.createShaderEffect(shader)
+    val content = android.graphics.RenderEffect.createOffsetEffect(0f, 0f)
+    val saturate = android.graphics.ColorMatrix().apply { setSaturation(1.3f) }
+    val frosted = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(saturate),
+        android.graphics.RenderEffect.createBlurEffect(blur, blur, android.graphics.Shader.TileMode.CLAMP))
+    val inside = android.graphics.RenderEffect.createBlendModeEffect(inPatch, frosted, android.graphics.BlendMode.SRC_IN)
+    val outside = android.graphics.RenderEffect.createBlendModeEffect(inPatch, content, android.graphics.BlendMode.SRC_OUT)
+    return android.graphics.RenderEffect.createBlendModeEffect(outside, inside, android.graphics.BlendMode.SRC_OVER)
+        .asComposeRenderEffect()
+}

@@ -46,6 +46,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.foundation.indication
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.drawWithContent
@@ -433,6 +435,9 @@ fun LauncherScreen(
         LiveDiscover.homeLayer = homeLayer
         onDispose { if (LiveDiscover.homeLayer === homeLayer) LiveDiscover.homeLayer = null }
     }
+    // The docks' frosted glass shows a blurred copy of the wallpaper as drawn (tilt included).
+    val wallpaperLayer = rememberGraphicsLayer()
+    val glassScene: androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit = { drawLayer(wallpaperLayer) }
     Box(Modifier.fillMaxSize().graphicsLayer {
         // The feed frame reuses the pager's render nodes in another window. Give Main
         // a complete render target so cross-window damage cannot erase stationary controls.
@@ -448,7 +453,10 @@ fun LauncherScreen(
             }
         },
         onFinish = { cancelled -> finishDrag(cancelled) })) {
-        DuneWallpaper(live = true)
+        Box(Modifier.fillMaxSize().drawWithContent {
+            wallpaperLayer.record { this@drawWithContent.drawContent() }
+            drawLayer(wallpaperLayer)
+        }) { DuneWallpaper(live = true) }
         BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { alpha = 1f - homeSearchProgress }
             .then(if (homeSearchOpen) Modifier.clearAndSetSemantics { } else Modifier)
             .windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -500,7 +508,10 @@ fun LauncherScreen(
             // Edit mode's toolbar takes the top edge, so Android's status bar steps aside while editing.
             val hideStatusBar = showStatusRail || SelectionMode.active
             LaunchedEffect(hideStatusBar) { onStatusMode(hideStatusBar) }
-            val pagerWidth = if (side == DockSide.BOTTOM) maxWidth else maxWidth - preset.dockWidth.dp - 28.dp
+            val pagerWidth = if (side == DockSide.BOTTOM) maxWidth else maxWidth - geometry.dockWidth.dp - 28.dp
+            // Room to the screen edge past the pages, under the side dock.
+            val pastEnd = maxWidth - pagerWidth
+            val fullWidth = maxWidth
             val dockAlignment = if (side == DockSide.LEFT) Alignment.TopStart else Alignment.TopEnd
             val sidePadding = if (side == DockSide.LEFT) Modifier.padding(start = 12.dp) else Modifier.padding(end = 12.dp)
             val leftColumnOrigin = (maxWidth / 2f - geometry.gridWidth.dp) / 2f - 16.dp
@@ -543,10 +554,23 @@ fun LauncherScreen(
                 onLeadingOverscroll = if (firstHome == 0) onDiscover else null,
                 jelly = jelly,
             ).graphicsLayer { jelly.apply(this) }) {
-            val pagerModifier = Modifier.offset(x = if (side == DockSide.LEFT) preset.dockWidth.dp + 28.dp else 0.dp)
+            // Where the side dock sits over the unfolded pages, in the pages' own pixels.
+            val dockFrost = if (!geometry.expanded) null else remember(fullWidth, geometry.dockTop, geometry.dockWidth, geometry.dockHeight, density) {
+                with(density) {
+                    frostPatchEffect(androidx.compose.ui.geometry.Rect(
+                        androidx.compose.ui.geometry.Offset((fullWidth - 12.dp - geometry.dockWidth.dp).toPx(), geometry.dockTop.dp.toPx()),
+                        androidx.compose.ui.geometry.Size(geometry.dockWidth.dp.toPx(), geometry.dockHeight.dp.toPx())),
+                        30.dp.toPx(), 14.dp.toPx())
+                }
+            }
+            val pagerModifier = Modifier.offset(x = if (side == DockSide.LEFT) geometry.dockWidth.dp + 28.dp else 0.dp)
                 .fillMaxHeight().width(pagerWidth)
                 .drawWithContent {
-                    homeLayer.record { this@drawWithContent.drawContent() }
+                    // The layer's offscreen buffer would cut pages off at this edge; on the unfolded screen it
+                    // reaches under the dock so moving pages can pass beneath the glass.
+                    val recordWidth = size.width + if (geometry.expanded) pastEnd.toPx() else 0f
+                    val recordSize = androidx.compose.ui.unit.IntSize(recordWidth.roundToInt(), size.height.roundToInt())
+                    homeLayer.record(this, layoutDirection, recordSize) { this@drawWithContent.drawContent() }
                     drawLayer(homeLayer)
                     LiveDiscover.host.get()?.invalidateFrame()
                 }.testTag("app-pager")
@@ -563,6 +587,9 @@ fun LauncherScreen(
                     }
                 }
                 .semantics { stateDescription = if (pager.currentPage == -1) "Discover" else if (pager.currentPage == visibleHomePages) "All apps" else "Home page ${pager.currentPage + 1} of $visibleHomePages" }
+            if (geometry.expanded && side != DockSide.BOTTOM) FrostedBackdrop(RoundedCornerShape(30.dp),
+                Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
+                    .width(geometry.dockWidth.dp).height(geometry.dockHeight.dp), drawScene = glassScene)
             if (geometry.expanded) {
                 Box(pagerModifier) {
                     // PagerState remains the source of truth for native Discover progress,
@@ -571,7 +598,7 @@ fun LauncherScreen(
                         key = { if (it < firstHome) "discover" else if (it - firstHome == visibleHomePages) "library" else "home-${it - firstHome}" }) { }
                     ExpandedWorkspace(
                         nativePager = nativePager, motion = workspaceMotion!!, firstHome = firstHome,
-                        visibleHomePages = visibleHomePages, panelWidth = panelWidth,
+                        visibleHomePages = visibleHomePages, panelWidth = panelWidth, pastEnd = pastEnd, dockFrost = dockFrost,
                         contentHeight = contentHeight, bottomSpace = bottomSpace, geometry = geometry,
                         state = state, previewSlots = previewLayout.slots, previewLeadingSlots = previewLayout.leadingSlots,
                         previewWidgetPlacements = previewLayout.widgetPlacements, appsById = appsById,
@@ -618,7 +645,7 @@ fun LauncherScreen(
             }
             if (showStatusRail) StatusRail(deviceStatus,
                 Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.contentTop.dp)
-                    .width(preset.dockWidth.dp).onSizeChanged {
+                    .width(geometry.dockWidth.dp).onSizeChanged {
                         // The normal rail's 20dp location slot and 3dp gap do not move the dock.
                         statusHeight = (with(density) { it.height.toDp().value } -
                             if (contentHeight < 500.dp) 0f else 23f).coerceAtLeast(0f)
@@ -626,28 +653,30 @@ fun LauncherScreen(
                 compact = contentHeight < 500.dp, iconSize = dockIconSize(geometry.iconSize).dp)
             val glassOpacity = ThemeStore.state.collectAsState().value.glassOpacity / .72f
             val glassShadow = if (WallpaperStore.state.collectAsState().value.glassShadow) 10.dp else 0.dp
-            if (side == DockSide.BOTTOM) Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomSpace)
+            val dockTint = Glass.copy(alpha = (.32f * glassOpacity).coerceIn(0f, 1f))
+            if (side == DockSide.BOTTOM) GlassPanel(RoundedCornerShape(30.dp), dockTint, glassScene,
+                Modifier.align(Alignment.BottomCenter).padding(bottom = bottomSpace)
                 .width((geometry.dockRowHeight * 4f + 16f).dp).height(geometry.bottomDockHeight.dp)
-                .outerShadow(glassShadow, RoundedCornerShape(30.dp)).testTag("dock"),
-                shape = RoundedCornerShape(30.dp), color = Glass.copy(alpha = (.32f * glassOpacity).coerceIn(0f, 1f)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .3f))) {
+                .outerShadow(glassShadow, RoundedCornerShape(30.dp)).testTag("dock")) {
                 Box(Modifier.padding(horizontal = 8.dp)) {
                     DockAppColumn(state.dock, previewLayout.dock, appsById, geometry.dockRowHeight,
-                        dockIconSize(geometry.iconSize), drag, insertionTarget,
+                        geometry.dockIconSize, drag, insertionTarget,
                         onLaunch = onLaunchFrom, onChoose = { dockSlot = it; sheet = "dock" }, horizontal = true)
                 }
-            } else Surface(Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
-                .width(preset.dockWidth.dp).height(geometry.dockHeight.dp)
+            } else GlassPanel(RoundedCornerShape(30.dp), dockTint,
+                // Unfolded, its frosted wallpaper sits under the pages and the pages frost themselves (see above).
+                if (geometry.expanded) null else glassScene,
+                Modifier.align(dockAlignment).then(sidePadding).offset(y = geometry.dockTop.dp)
+                .width(geometry.dockWidth.dp).height(geometry.dockHeight.dp)
                 // The shadow sits outside the offscreen layer below, which would otherwise clip it to the dock's box.
                 .outerShadow(glassShadow, RoundedCornerShape(30.dp)).graphicsLayer {
                     // Composite the stationary dock independently of the shared pager layer.
                     compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
-                }.testTag("dock"),
-                shape = RoundedCornerShape(30.dp), color = Glass.copy(alpha = (.32f * glassOpacity).coerceIn(0f, 1f)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .3f))) {
-                Column(Modifier.padding(vertical = 8.dp).verticalScroll(dockScroll)) {
+                }.testTag("dock")) {
+                // One slot per app row: each dock icon lines up with a row of Home icons.
+                Column(Modifier.verticalScroll(dockScroll)) {
                     DockAppColumn(state.dock, previewLayout.dock, appsById, geometry.dockRowHeight,
-                        dockIconSize(geometry.iconSize), drag, insertionTarget,
+                        geometry.dockIconSize, drag, insertionTarget,
                         onLaunch = onLaunchFrom, onChoose = { dockSlot = it; sheet = "dock" })
                 }
             }
@@ -694,7 +723,7 @@ fun LauncherScreen(
             }
             if (!inLibrary && !drag.active && side != DockSide.BOTTOM) Column(Modifier
                 .align(if (side == DockSide.LEFT) Alignment.BottomStart else Alignment.BottomEnd).then(sidePadding).padding(bottom = 6.dp)
-                .width(preset.dockWidth.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                .width(geometry.dockWidth.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val controlSize = dockIconSize(geometry.iconSize).dp
                 if (pager.currentPage == -1) CircleControl(Icons.Rounded.ArrowForward, "Back to home", "discover-home", controlSize) { scope.launch { pager.animateScrollToPage(0) } }
@@ -1135,7 +1164,7 @@ fun LauncherScreen(
                     // A bottom dock fills the lower edge, so removal moves to the top corner.
                     DockSide.BOTTOM -> Alignment.TopEnd; DockSide.LEFT -> Alignment.BottomStart; DockSide.RIGHT -> Alignment.BottomEnd
                 }).navigationBarsPadding().statusBarsPadding().padding(horizontal = 12.dp, vertical = 12.dp)
-                    .width((if (expandedWorkspace) state.expanded else state.compact).dockWidth.dp).height(64.dp)
+                    .width(sideDockBarWidth((if (expandedWorkspace) state.expanded else state.compact).dockWidth).dp).height(64.dp)
                     .dropRegion(drag, DropTarget.Remove).testTag("remove-drop-target"),
                 color = if (target == DropTarget.Remove) Color(0xFFB33B3B) else Glass.copy(alpha = .96f), shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.fillMaxSize().padding(vertical = 6.dp), verticalArrangement = Arrangement.Center,
@@ -1394,6 +1423,10 @@ private fun ExpandedWorkspace(
     firstHome: Int,
     visibleHomePages: Int,
     panelWidth: Dp,
+    /** Room past the workspace's right edge (under the dock) that moving pages may pass through. */
+    pastEnd: Dp,
+    /** Blurs the patch of moving pages under the dock's glass. */
+    dockFrost: androidx.compose.ui.graphics.RenderEffect?,
     contentHeight: Dp,
     bottomSpace: Dp,
     geometry: HomeGeometry,
@@ -1468,10 +1501,18 @@ private fun ExpandedWorkspace(
         }
     }
 
-    Box(Modifier.fillMaxSize().clipToBounds().testTag("expanded-workspace")) {
+    val pastEndPx = with(density) { pastEnd.toPx() }
+    val viewport = with(density) { viewportWidth.toDp() }
+    // The pages' layer runs on to the screen edge so moving pages can pass under the dock (and be frosted there);
+    // panes therefore take explicit widths rather than filling it.
+    Box(Modifier.fillMaxSize().testTag("expanded-workspace")) {
+    Box(Modifier.wrapContentWidth(Alignment.Start, unbounded = true).requiredWidth(viewport + pastEnd).fillMaxHeight()
+        .revealPastEnd(viewportWidth, pastEndPx, dockFrost) {
+            if (nativePager.isDiscoverBound(firstHome)) 0f else pastEndReveal(nativePager.currentPageOffsetFraction)
+        }) {
         if (showDiscover) {
             key("discover-pane") {
-                Box(Modifier.place(-viewportWidth).fillMaxSize()) {
+                Box(Modifier.place(-viewportWidth).width(viewport).fillMaxHeight()) {
                     DiscoverContent(Modifier.fillMaxSize().padding(start = 16.dp, top = 16.dp, bottom = 16.dp))
                 }
             }
@@ -1512,7 +1553,7 @@ private fun ExpandedWorkspace(
 
         if (showLibrary) {
             key("library-pane") {
-                Box(Modifier.place((visibleHomePages - 1) * stride + viewportWidth).fillMaxSize()) {
+                Box(Modifier.place((visibleHomePages - 1) * stride + viewportWidth).width(viewport).fillMaxHeight()) {
                     AppLibrary(state, libraryQuery, onLibraryQuery, onLaunch, onPinned,
                         onActions = onActions,
                         modifier = Modifier.fillMaxSize().padding(start = 16.dp, top = 16.dp, bottom = bottomSpace)
@@ -1521,6 +1562,7 @@ private fun ExpandedWorkspace(
                 }
             }
         }
+    }
     }
 }
 
@@ -1879,3 +1921,6 @@ private fun WidgetActions(
         Spacer(Modifier.height(12.dp))
     }
 }
+
+/** Toward Discover: that page lives in its own window, so nothing passes under the dock on the way. */
+private fun androidx.compose.foundation.pager.PagerState.isDiscoverBound(firstHome: Int) = currentPage < firstHome

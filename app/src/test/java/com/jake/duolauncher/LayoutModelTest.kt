@@ -4,25 +4,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LayoutModelTest {
-    @Test fun `aligned dock spans first through third icon images on the physical Fold presets`() {
-        val p = LayoutPreset(rowGap = 16.263264f, dockWidth = 73.46808f, dockPosition = .503011f)
+    @Test fun `aligned side dock holds home-size icons that line up with the app rows`() {
         for (labels in listOf(true, false)) {
-            val g = homeGeometry(475.43f, 696.38f, p, labels, statusHeight = 160f, labelHeight = 21.12f)
+            val g = homeGeometry(851f, 850f, LayoutPreset(), labels)
             val firstImageTop = g.contentTop + g.widgetHeight + 18f
-            val thirdImageBottom = firstImageTop + 2f * g.rowHeight + g.iconSize
-            assertEquals(firstImageTop, g.dockTop, .01f)
-            assertEquals(thirdImageBottom, g.dockTop + g.dockHeight, .01f)
-            assertEquals(g.dockHeight, 4f * g.dockRowHeight + 16f, .01f)
-            val feed = homeGeometry(475.43f, 696.38f, p, labels, statusHeight = 160f, labelHeight = 21.12f, inLibrary = true)
+            assertEquals(g.rowHeight, g.dockRowHeight, .01f)
+            assertEquals(4f * g.rowHeight, g.dockHeight, .01f)
+            assertEquals(g.iconSize, g.dockIconSize, .01f)
+            // Slots center their icons, so the first dock icon starts level with the first row of app icons.
+            assertEquals(firstImageTop, g.dockTop + (g.dockRowHeight - g.dockIconSize) / 2f, .01f)
+            val feed = homeGeometry(851f, 850f, LayoutPreset(), labels, inLibrary = true)
             assertEquals(g.dockTop, feed.dockTop, .01f)
             assertEquals(g.dockHeight, feed.dockHeight, .01f)
         }
     }
+    @Test fun `side dock bar wraps the saved icon column in glass`() {
+        val g = homeGeometry(851f, 850f, LayoutPreset(dockWidth = 68f), true)
+        assertEquals(95f, g.dockWidth, .01f)
+        assertEquals(g.homeWidth - 95f - 44f, g.gridWidth, .01f)
+        // A narrow column shrinks its icons rather than overflowing the glass.
+        assertEquals(56f, homeGeometry(851f, 850f, LayoutPreset(dockWidth = 56f), true).dockIconSize, .01f)
+        // A bottom dock has no side bar and keeps its smaller icons.
+        val bottom = homeGeometry(400f, 850f, LayoutPreset(dockSide = DockSide.BOTTOM), true)
+        assertEquals(0f, bottom.dockWidth, .01f)
+        assertEquals(dockIconSize(bottom.iconSize), bottom.dockIconSize, .01f)
+    }
     @Test fun `manual dock mode keeps saved position and alignment does not overwrite it`() {
         val p = LayoutPreset(dockPosition = .43f, dockAlignToGrid = false)
         val manual = homeGeometry(475f, 700f, p, true)
-        assertEquals(700f * .43f - 128f, manual.dockTop, .01f)
-        assertEquals(256f, manual.dockHeight, .01f)
+        assertEquals(700f * .43f - 2f * manual.rowHeight, manual.dockTop, .01f)
+        assertEquals(4f * manual.rowHeight, manual.dockHeight, .01f)
         assertEquals(.43f, p.copy(dockAlignToGrid = true).sanitized().dockPosition)
     }
     @Test fun `search keeps four complete dock targets between status and keyboard`() {
@@ -33,7 +44,8 @@ class LayoutModelTest {
                 assertTrue(g.dockTop >= 80f)
                 assertTrue(g.dockTop + g.dockHeight <= height - 12f + .01f)
                 assertTrue(g.dockRowHeight >= 48f)
-                assertTrue(4f * g.dockRowHeight + 16f <= g.dockHeight + .01f)
+                assertTrue(g.dockIconSize + 6f <= g.dockRowHeight + .01f)
+                assertTrue(4f * g.dockRowHeight <= g.dockHeight + .01f)
             }
         }
     }
@@ -43,7 +55,8 @@ class LayoutModelTest {
         val largeText = homeGeometry(475f, 700f, LayoutPreset(), true, labelHeight = 34f)
         assertEquals(regular.rowHeight, hidden.rowHeight)
         assertTrue(largeText.rowHeight >= regular.rowHeight + 14f)
-        assertTrue(regular.iconSize / (regular.gridWidth / 4f) in .70f.. .77f)
+        // The side dock's glass bar leaves a slightly tighter grid, close to Duomo's 66dp icons in 80dp cells.
+        assertTrue(regular.iconSize / (regular.gridWidth / 4f) in .70f.. .80f)
     }
     @Test fun `new icon default preserves tuned presets and current schema values`() {
         assertEquals(66f, upgradePreset(LayoutPreset(iconSize = 60f), 2, false).iconSize)
@@ -60,9 +73,9 @@ class LayoutModelTest {
             val g = homeGeometry(width, height, p, true)
             assertTrue("$width x $height", g.dockTop >= 8f)
             assertTrue("Dock overlaps bottom controls at $width x $height", g.dockTop + g.dockHeight <= height - 124f + .01f)
-            assertTrue(g.gridWidth + p.dockWidth + 24f <= g.homeWidth)
+            assertTrue(g.gridWidth + sideDockBarWidth(p.dockWidth) + 24f <= g.homeWidth)
             assertTrue(g.iconSize + 8f <= g.gridWidth / 4f)
-            if (g.dockHeight == 256f) {
+            if (g.dockHeight == 4f * g.rowHeight) {
                 val library = homeGeometry(width, height, p, true, inLibrary = true)
                 assertEquals("Paging must preserve even a low dock position", g.dockTop, library.dockTop, .01f)
             }

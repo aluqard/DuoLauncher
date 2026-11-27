@@ -23,4 +23,12 @@ class HomeChromeTest {
         assertEquals(listOf("Wi-Fi"), matchingSettings("WIFI").map { it.title })
         assertTrue(matchingSettings("  ").isEmpty())
     }
+
+    @Test fun `pages show past the edge only while they move`() {
+        org.junit.Assert.assertEquals(0f, pastEndReveal(0f), 0f)
+        org.junit.Assert.assertEquals(1f, pastEndReveal(.5f), 0f)
+        org.junit.Assert.assertEquals(1f, pastEndReveal(-.5f), 0f)
+        // Fades in over the first part of a swipe rather than popping in.
+        org.junit.Assert.assertEquals(.5f, pastEndReveal(.06f), .001f)
+    }
 }
