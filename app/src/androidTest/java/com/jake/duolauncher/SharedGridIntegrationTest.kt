@@ -52,10 +52,10 @@ class SharedGridIntegrationTest {
             compose.runOnIdle { model().removePlacement(DropTarget.Widget(0)) }
             val catalogBaseline = model().state.value.layout
             compose.onNodeWithTag("home-cell-0").performTouchInput { longClick() }
-            compose.onNodeWithText("Add to Home").assertIsDisplayed()
-            compose.onNodeWithTag("empty-space-widgets").performClick()
+            compose.onNodeWithTag("edit-toolbar").assertIsDisplayed()
+            compose.onNodeWithTag("edit-widgets").performClick()
             compose.onNodeWithTag("visual-widget-picker").assertIsDisplayed()
-            compose.onNodeWithText("Widgets").assertIsDisplayed()
+            compose.onNodeWithTag("widget-picker-close").assertIsDisplayed()
             compose.onNode(hasText("Search widgets") and hasSetTextAction()).assertIsDisplayed()
             compose.onNodeWithTag("widget-builtin-$CLOCK_WIDGET").assertIsDisplayed()
                 .assertTextContains("Clock")
@@ -139,17 +139,17 @@ class SharedGridIntegrationTest {
             compose.onNodeWithContentDescription("Home page 2").performClick()
             compose.waitForIdle()
             compose.onNodeWithTag("widget-slot-$slot").performTouchInput { longClick() }
-            compose.onNodeWithText("Widget options").assertIsDisplayed()
+            compose.onNodeWithTag("widget-menu").assertIsDisplayed()
             pressBack()
-            compose.onNodeWithText("Widget options").assertDoesNotExist()
+            compose.onNodeWithTag("widget-menu").assertDoesNotExist()
             compose.onNodeWithTag("widget-slot-$slot").performTouchInput { longClick() }
-            compose.onNodeWithText("Widget options").assertIsDisplayed()
-            compose.onNodeWithText("Resize on Home").performClick()
+            compose.onNodeWithTag("widget-menu").assertIsDisplayed()
+            compose.onNodeWithTag("widget-menu-size").performClick()
             compose.onNodeWithTag("widget-resize-preview-$slot").assertIsDisplayed()
             compose.onNodeWithTag("widget-resize-handle-$slot").performTouchInput {
                 down(center); moveBy(Offset(width * 2f, 0f), 400); up()
             }
-            compose.onNodeWithText("Apply").performClick()
+            compose.onNodeWithText("Done").performClick()
             val resized = requireNotNull(model().placement(slot))
             assertTrue("Dragging the handle increases the widget width", resized.spanX > 1)
             val options = manager.getAppWidgetOptions(id)
@@ -190,7 +190,7 @@ class SharedGridIntegrationTest {
             compose.onNodeWithContentDescription("Home page 2").performClick()
             compose.waitForIdle()
             compose.onNodeWithTag("home-cell-24").performTouchInput { longClick() }
-            compose.onNodeWithTag("empty-space-widgets").performClick()
+            compose.onNodeWithTag("edit-widgets").performClick()
             compose.onNode(hasText("Search widgets") and hasSetTextAction())
                 .performTextInput(provider.loadLabel(compose.activity.packageManager).toString())
             compose.onNodeWithTag("widget-provider-${provider.provider.flattenToString()}").performScrollTo().performClick()
@@ -219,8 +219,8 @@ class SharedGridIntegrationTest {
             val arranged = model().state.value.layout
             val widget = requireNotNull(arranged.placement(0))
             compose.onNodeWithTag("widget-slot-${widget.slot}").performTouchInput { longClick() }
-            compose.onNodeWithText("Apply").assertIsDisplayed()
-            compose.onNodeWithText("Resize on Home").performClick()
+            compose.onNodeWithTag("widget-menu").assertIsDisplayed()
+            compose.onNodeWithTag("widget-menu-size").performClick()
             compose.onNodeWithTag("widget-resize-preview-${widget.slot}").assertIsDisplayed()
             compose.onNode(hasText("Cancel") and hasClickAction() and
                 !hasContentDescription("Cancel widget setup")).performClick()

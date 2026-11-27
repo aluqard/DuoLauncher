@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import android.accessibilityservice.AccessibilityServiceInfo
@@ -65,6 +67,23 @@ class LiveDiscoverIntegrationTest {
         if (node.isEditable) return true
         return (0 until node.childCount).any { hasSearchField(node.getChild(it)) }
     }
+    /** Runs a page-indicator accessibility action ("Discover" or "All apps page"); the dots have no buttons for them. */
+    private fun pageAction(label: String) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 10_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction? {
+                if (node == null) return null
+                node.actionList.firstOrNull { it.label?.toString() == label }?.let { action ->
+                    node.performAction(action.id); return action }
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            if (find(automation.rootInActiveWindow) != null) return
+            android.os.SystemClock.sleep(100)
+        }
+        error("No page action $label")
+    }
+
     private fun click(description: String) {
         var bounds: android.graphics.Rect? = null
         var stableSince = 0L
@@ -115,7 +134,7 @@ class LiveDiscoverIntegrationTest {
             }
             await { LiveDiscover.host.get() != null }
             // A first open loads content; every gesture below reuses this exact connection.
-            click("Discover")
+            pageAction("Discover")
             await(20000) { progress() >= .99f && LiveDiscover.nativePosition >= .99f && !LiveDiscover.pagerOwnsMotion && LiveDiscover.message.value == null }
             val host = LiveDiscover.host.get()
             // The fixed dock and rail remain in Duo's window while Google's inset feed owns
@@ -157,7 +176,7 @@ class LiveDiscoverIntegrationTest {
             touch(MotionEvent.ACTION_UP, width * .17f, y)
             await { progress() == 0f && !LiveDiscover.pagerOwnsMotion }
             SystemClock.sleep(300)
-            click("Discover")
+            pageAction("Discover")
             await { progress() >= .99f && LiveDiscover.nativePosition >= .99f && !LiveDiscover.pagerOwnsMotion }
             SystemClock.sleep(150)
             val feedY = height * .58f
@@ -202,7 +221,7 @@ class LiveDiscoverIntegrationTest {
                 SystemClock.sleep(250)
                 assertEquals("Library swipes must never open Discover", 0f, progress(), 0f)
             }
-            click("Discover")
+            pageAction("Discover")
             await { progress() >= .99f && LiveDiscover.nativePosition >= .99f && !LiveDiscover.pagerOwnsMotion }
             click("Search Google")
             await { automation.rootInActiveWindow?.packageName == DiscoverClient.GOOGLE_PACKAGE && hasSearchField(automation.rootInActiveWindow) }
@@ -298,7 +317,7 @@ class DiscoverWidgetRetentionIntegrationTest {
             compose.waitForIdle()
             compose.onNodeWithTag("widget-slot-${widget.slot}", useUnmergedTree = true).assertExists()
 
-            compose.onNodeWithTag("discover-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("Discover")
             compose.waitUntil(5_000) {
                 compose.onNodeWithTag("app-pager").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.StateDescription] == "Discover"
             }

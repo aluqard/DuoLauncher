@@ -405,7 +405,7 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
                             .semantics { contentDescription = app?.label ?: "Choose dock app on home" }
                             .clickable(role = Role.Button) { if (app != null) onLaunch(app) else onHome() }, contentAlignment = Alignment.Center) {
                             if (app != null) Image(app.icon.asImageBitmap(), null,
-                                Modifier.size(dockIconSize(geometry.iconSize).dp).clip(RoundedCornerShape(11.dp)))
+                                Modifier.size(dockIconSize(geometry.iconSize).dp).clip(LocalIconShape.current))
                             else Icon(Icons.Rounded.Home, null, tint = Color.White)
                         }
                     }

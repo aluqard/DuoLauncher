@@ -13,6 +13,11 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 
 @Composable
 internal fun AppearanceSettings(state: AppearanceState, onMode: (AppearanceMode) -> Unit,
@@ -24,12 +29,21 @@ internal fun AppearanceSettings(state: AppearanceState, onMode: (AppearanceMode)
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("appearance-settings")) {
-        Text("Appearance", style = MaterialTheme.typography.titleMedium)
-        AppearanceMode.entries.forEach { mode ->
-            FilterChip(selected = state.mode == mode, onClick = { onMode(mode) }, label = { Text(when (mode) {
-                AppearanceMode.LIGHT -> "Light"; AppearanceMode.DARK -> "Dark"; AppearanceMode.SYSTEM -> "Follow system"
-                AppearanceMode.SUNRISE_SUNSET -> "Sunrise / sunset"
-        }) }, modifier = Modifier.testTag("appearance-${mode.name.lowercase()}"))
+        SettingsGroup {
+            AppearanceMode.entries.forEachIndexed { index, mode ->
+                if (index > 0) HorizontalDivider(Modifier.padding(start = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                Row(Modifier.fillMaxWidth().clickable { onMode(mode) }.heightIn(min = 50.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp).testTag("appearance-${mode.name.lowercase()}"),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(when (mode) {
+                        AppearanceMode.LIGHT -> "Light"; AppearanceMode.DARK -> "Dark"; AppearanceMode.SYSTEM -> "Follow system"
+                        AppearanceMode.SUNRISE_SUNSET -> "Match sunrise & sunset"
+                    }, Modifier.weight(1f), fontSize = 17.sp)
+                    if (state.mode == mode) Icon(Icons.Rounded.Check, "Selected",
+                        tint = androidx.compose.ui.graphics.Color(0xFF2F8CFF), modifier = Modifier.size(20.dp))
+                }
+            }
         }
         if (state.mode == AppearanceMode.SUNRISE_SUNSET) {
             state.fallback?.let { Text(it, color = MaterialTheme.colorScheme.error) }

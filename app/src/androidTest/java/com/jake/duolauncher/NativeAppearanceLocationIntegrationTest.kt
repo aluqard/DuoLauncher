@@ -63,6 +63,23 @@ class NativeAppearanceLocationIntegrationTest {
         return automation.windows.firstNotNullOfOrNull { visit(it.root) }
     }
 
+    /** Runs a page-indicator accessibility action ("Discover" or "All apps page"); the dots have no buttons for them. */
+    private fun pageAction(label: String) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 10_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction? {
+                if (node == null) return null
+                node.actionList.firstOrNull { it.label?.toString() == label }?.let { action ->
+                    node.performAction(action.id); return action }
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            if (find(automation.rootInActiveWindow) != null) return
+            android.os.SystemClock.sleep(100)
+        }
+        error("No page action $label")
+    }
+
     private fun click(value: String) {
         var target: AccessibilityNodeInfo? = null
         await {
@@ -189,7 +206,7 @@ class NativeAppearanceLocationIntegrationTest {
 
             click("Close customization")
             await { find("Discover")?.isVisibleToUser == true }
-            click("Discover")
+            pageAction("Discover")
             await(20_000) { LiveDiscover.progress >= .99f && LiveDiscover.message.value == null }
             click("Back to home")
             await { LiveDiscover.progress == 0f && find("Discover")?.isVisibleToUser == true }

@@ -3,14 +3,20 @@ package com.jake.duolauncher
 /** Jake's reference measures 76px dock artwork against 106px home artwork. */
 fun dockIconSize(homeIconSize: Float) = homeIconSize * (76f / 106f)
 
+const val AUTO_TOP_MARGIN = -1f
+
 data class LayoutPreset(
     val iconSize: Float = 66f,
     val rowGap: Float = 8f,
     val dockWidth: Float = 68f,
     val dockPosition: Float = 0.56f,
     val dockAlignToGrid: Boolean = true,
+    val dockSide: DockSide = DockSide.RIGHT,
+    /** Space above the first Home row in dp; negative centers the grid vertically (the original behavior). */
+    val topMargin: Float = AUTO_TOP_MARGIN,
 ) {
     fun sanitized() = copy(
+        topMargin = if (topMargin < 0f) AUTO_TOP_MARGIN else topMargin.coerceIn(8f, 160f),
         iconSize = iconSize.coerceIn(40f, 68f),
         rowGap = rowGap.coerceIn(0f, 28f),
         dockWidth = dockWidth.coerceIn(56f, 84f),
@@ -29,7 +35,14 @@ data class HomeGeometry(
     val dockTop: Float,
     val dockHeight: Float,
     val dockRowHeight: Float,
+    /** Edge holding the dock. The unfolded (expanded) layout always keeps the original right dock. */
+    val dockSide: DockSide = DockSide.RIGHT,
+    /** Height of a bottom dock bar; 0 for side docks. */
+    val bottomDockHeight: Float = 0f,
 )
+
+/** The dock edge actually used: side docks other than RIGHT apply to the folded/phone layout only. */
+fun effectiveDockSide(preset: LayoutPreset, expanded: Boolean) = if (expanded) DockSide.RIGHT else preset.dockSide
 
 /** Advance old defaults without changing individually tuned values. */
 fun upgradePreset(preset: LayoutPreset, schema: Int, expanded: Boolean): LayoutPreset = when {
@@ -46,12 +59,16 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val p = preset.sanitized()
     val expanded = width >= 650f
     val homeWidth = if (expanded) minOf(460f, width * 0.56f) else width
-    val gridWidth = (homeWidth - p.dockWidth - 44f).coerceAtLeast(192f)
+    val side = effectiveDockSide(p, expanded)
+    val gridWidth = (homeWidth - (if (side == DockSide.BOTTOM) 0f else p.dockWidth) - 44f).coerceAtLeast(192f)
     val icon = minOf(p.iconSize, (gridWidth / 4f - 10f).coerceAtLeast(32f))
     // Keep the same icon rhythm when labels are hidden; allow larger system text to fit.
     val row = maxOf(48f, icon + if (labels) maxOf(20f, labelHeight) else 20f) + p.rowGap
     val widget = minOf(176f, gridWidth / 2f - 5f).coerceAtLeast(88f)
-    val contentTop = ((height - widget - 18f - 4f * row - homeBottomSpace) / 2f).coerceIn(16f, 72f)
+    // A bottom dock is one row of dock-sized icons in a glass bar above the page controls.
+    val bottomDock = if (side == DockSide.BOTTOM) dockIconSize(icon) + 28f else 0f
+    val contentTop = if (p.topMargin >= 0f) p.topMargin
+        else ((height - widget - 18f - 4f * row - homeBottomSpace - bottomDock) / 2f).coerceIn(16f, 72f)
     // Search reclaims the redundant bottom controls' space for all four dock apps.
     // Extremely short windows still scroll rather than reduce touch targets below 48dp.
     val topLimit = maxOf(8f, statusHeight)
@@ -59,14 +76,15 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     // Outer dock edges span the first through third icon images, excluding the last label.
     val desiredHeight = if (p.dockAlignToGrid) 2f * row + icon else 256f
     val dockHeight = minOf(desiredHeight, (height - topLimit - bottomReserve).coerceAtLeast(76f))
-    val dockRowHeight = ((dockHeight - 16f) / 4f).coerceAtLeast(48f)
+    val dockRowHeight = if (side == DockSide.BOTTOM) (gridWidth / 4f).coerceAtLeast(48f) else ((dockHeight - 16f) / 4f).coerceAtLeast(48f)
     // Use the home position as the anchor, so removing library buttons does not
     // move a low-positioned dock on ordinary page swipes. Move up only to fit.
     val homeDockHeight = minOf(desiredHeight, (height - topLimit - 124f).coerceAtLeast(76f))
     val homeDockTop = (if (p.dockAlignToGrid) contentTop + widget + 18f else height * p.dockPosition - homeDockHeight / 2f)
         .coerceIn(topLimit, maxOf(topLimit, height - homeDockHeight - 124f))
     val dockTop = homeDockTop.coerceIn(topLimit, maxOf(topLimit, height - dockHeight - bottomReserve))
-    return HomeGeometry(expanded, homeWidth, gridWidth, icon, row, widget, contentTop, dockTop, dockHeight, dockRowHeight)
+    return HomeGeometry(expanded, homeWidth, gridWidth, icon, row, widget, contentTop, dockTop, dockHeight, dockRowHeight,
+        side, bottomDock)
 }
 
 /** Keep stored order stable across installs, removals and configuration changes. */

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import androidx.compose.ui.geometry.Offset
@@ -53,7 +55,7 @@ class WorkspaceIntegrationTest {
         ready(); val before = model().state.value.layout
         try {
             val app = model().state.value.apps.first { it.id !in model().state.value.order }
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTextInput(app.label)
             begin("library-app-${app.id}")
             compose.waitUntil(4000) { page().startsWith("Home page") }
@@ -85,7 +87,7 @@ class WorkspaceIntegrationTest {
             shell("settings put secure show_ime_with_hard_keyboard 1")
             shell("settings put secure stylus_handwriting_enabled 0")
             val app = model().state.value.apps.first { it.id !in model().state.value.order }
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTouchInput { click() }
             compose.onNodeWithTag("library-search").performTextInput(app.label)
             compose.waitUntil(10000) { imeVisible() }
@@ -103,7 +105,7 @@ class WorkspaceIntegrationTest {
     @Test fun dockCanBeRearrangedFromAllAppsWithoutOpeningItsPicker() {
         ready(); val before = model().state.value.layout
         try {
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             val expected = dropApp(before, before.dock[0]!!, DropTarget.Dock(1))
             begin("dock-slot-0"); drop("dock-slot-1")
             assertEquals(expected, model().state.value.layout)
@@ -121,7 +123,7 @@ class WorkspaceIntegrationTest {
             waitForDock(arranged)
             val installed = model().state.value.apps.map { it.id }
             val app = model().state.value.apps.first { it.id !in arranged.dock }
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTextInput(app.label)
             begin("library-app-${app.id}")
             compose.waitUntil(4000) { page().startsWith("Home page") }
@@ -132,7 +134,7 @@ class WorkspaceIntegrationTest {
             assertEquals(installed, model().state.value.apps.map { it.id })
             undo()
             assertEquals(arranged, model().state.value.layout)
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             begin("library-app-${app.id}")
             root().performTouchInput { moveTo(Offset(2f, 2f), 250); up() }
             compose.waitForIdle()
@@ -154,7 +156,7 @@ class WorkspaceIntegrationTest {
             val revision = model().state.value.editRevision
             val canUndo = model().state.value.canUndoEdit
             val preferences = compose.activity.getSharedPreferences("launcher", 0).getString("state", null)
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTextInput(app.label)
             begin("library-app-${app.id}")
             compose.waitUntil(4000) { page().startsWith("Home page") }
@@ -258,7 +260,7 @@ class WorkspaceIntegrationTest {
             assertEquals("Home page 2 of 3", page())
             compose.waitForIdle()
             repeat(3) {
-                compose.onNodeWithTag("library-page-link").performClick()
+                compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
                 compose.waitForIdle()
                 compose.waitUntil(5000) { page() == "All apps" }
                 assertEquals("All apps", page())

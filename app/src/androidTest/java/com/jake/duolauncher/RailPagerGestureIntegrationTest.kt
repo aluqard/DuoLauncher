@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import androidx.compose.ui.geometry.Offset
@@ -29,7 +31,7 @@ class RailPagerGestureIntegrationTest {
         compose.waitUntil(15_000) {
             !ViewModelProvider(compose.activity)[LauncherModel::class.java].state.value.loading
         }
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.waitForIdle()
         compose.onNodeWithTag("app-pager").performTouchInput { swipeRight() }
         compose.waitForIdle()
@@ -99,10 +101,10 @@ class RailPagerGestureIntegrationTest {
         compose.onNodeWithTag("settings").assertDoesNotExist()
         compose.openHomeCustomization()
         compose.onNodeWithTag("customization-gestures").performClick()
-        compose.onNodeWithTag("google-search-switch").assertExists()
+        compose.onNodeWithTag("label-switch").assertExists()
         compose.onNodeWithContentDescription("Close customization").performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("google-search-switch").assertDoesNotExist()
+        compose.onNodeWithTag("label-switch").assertDoesNotExist()
 
         val dockCenter = compose.onNodeWithTag("dock").fetchSemanticsNode().boundsInRoot.center.x
         val search = compose.onNodeWithTag("search-visual", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot

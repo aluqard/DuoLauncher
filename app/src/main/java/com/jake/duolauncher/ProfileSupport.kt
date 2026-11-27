@@ -49,7 +49,7 @@ fun removedAppIds(
     personalSerial: Long,
     definitivelyRemovedProfiles: Set<Long> = emptySet(),
 ): Set<String> = savedIds.filterTo(mutableSetOf()) { id ->
-    if (isReservedFolderId(id)) return@filterTo false
+    if (isReservedFolderId(id) || isShortcutId(id)) return@filterTo false
     val identity = parseProfileAppId(id) ?: return@filterTo false
     val serial = identity.userSerial ?: personalSerial
     val packageName = identity.component.substringBefore('/').takeIf(String::isNotBlank) ?: return@filterTo false

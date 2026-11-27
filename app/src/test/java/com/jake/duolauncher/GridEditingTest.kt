@@ -16,6 +16,33 @@ class GridEditingTest {
             widgetCandidate(layout, 0, 0, 2, 2))
     }
 
+    @Test fun `exact widget target shifts up to keep the pressed bottom cell covered`() {
+        // Empty second page: a 3x2 widget pressed on row 5, column 1 cannot extend downward.
+        val layout = HomeLayout(emptyList(), emptyList(), emptyList())
+        val pressed = 5 * GRID_COLUMNS + 1
+        assertNull(widgetCandidate(layout, 0, homeCellIndex(1, pressed), 3, 2))
+        val anchor = nearestWidgetAnchor(layout, 0, 1, pressed, 3, 2, covering = true)
+        assertEquals(homeCellIndex(1, 4 * GRID_COLUMNS + 1), anchor)
+        assertNotNull(widgetCandidate(layout, 0, anchor!!, 3, 2))
+    }
+
+    @Test fun `widget anchor search respects occupied cells and reports no room`() {
+        // Page 0: rows 0-4 are full of apps, only row 5 is free.
+        val slots = List(5 * GRID_COLUMNS) { "app$it" }
+        val layout = HomeLayout(slots, emptyList(), emptyList())
+        assertNull(nearestWidgetAnchor(layout, 0, 0, 5 * GRID_COLUMNS, 3, 2, covering = true))
+        assertNull(nearestWidgetAnchor(layout, 0, 0, 5 * GRID_COLUMNS, 3, 2))
+        assertEquals(homeCellIndex(0, 5 * GRID_COLUMNS), nearestWidgetAnchor(layout, 0, 0, 5 * GRID_COLUMNS, 4, 1))
+    }
+
+    @Test fun `page change keeps the nearest free anchor to the previous position`() {
+        val blocker = WidgetPlacement(7, 100, 1, 0, 0, 4, 3)
+        val layout = HomeLayout(emptyList(), emptyList(), listOf(blocker))
+        // Requested row 1 is covered by the blocker; the closest free 2x2 anchor is directly below it.
+        assertEquals(homeCellIndex(1, 3 * GRID_COLUMNS + 1),
+            nearestWidgetAnchor(layout, 0, 1, GRID_COLUMNS + 1, 2, 2))
+    }
+
     @Test fun `schema5 apps retain pages gaps and rows below top widgets`() {
         val old = MutableList<String?>(18) { null }.apply { this[0] = "a"; this[15] = "p"; this[17] = "b" }
         val migrated = migrateSchema5Apps(old)

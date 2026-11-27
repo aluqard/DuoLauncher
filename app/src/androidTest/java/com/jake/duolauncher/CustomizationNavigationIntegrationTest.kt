@@ -49,7 +49,8 @@ class CustomizationNavigationIntegrationTest {
         val empty = (0 until HOME_CELLS).first { before.slotAt(it) == null && it !in blocked }
 
         compose.onNodeWithTag("home-cell-$empty").performSemanticsAction(SemanticsActions.OnLongClick)
-        compose.onNodeWithTag("empty-space-wallpaper").performClick()
+        compose.onNodeWithTag("edit-settings").performClick()
+        compose.onNodeWithTag("customization-wallpaper").performClick()
         compose.onNodeWithTag("background-choose").assertIsDisplayed()
         compose.onNodeWithTag("wallpaper-preview").assertExists()
         assertEquals(before, model().state.value.layout)

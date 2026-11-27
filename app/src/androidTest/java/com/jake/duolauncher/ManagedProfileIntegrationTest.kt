@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import android.app.role.RoleManager
@@ -84,7 +86,7 @@ class ManagedProfileIntegrationTest {
         assertFalse(personalApp.isWork)
         assertTrue(workApp.isWork)
         assertFalse("Work icon should carry Android's profile badge", personalApp.icon.sameAs(workApp.icon))
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.waitForIdle()
         compose.onNodeWithTag("library-app-$personalId").assertExists()
         compose.onNodeWithTag("library-app-$workId").assertDoesNotExist()
@@ -134,7 +136,7 @@ class ManagedProfileIntegrationTest {
             assertEquals(workPin.id, model().state.value.dock[dockIndex])
             assertEquals("Work", model().state.value.apps.first { it.id == workId }.profileLabel)
             assertFalse(model().state.value.apps.first { it.id == workId }.available)
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.waitForIdle()
             // A work app can remain in the precomposed semantics tree while Personal is
             // selected, so its mere presence does not identify the active tab.

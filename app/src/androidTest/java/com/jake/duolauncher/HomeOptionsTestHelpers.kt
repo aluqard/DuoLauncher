@@ -22,5 +22,5 @@ internal fun ComposeTestRule.openHomeCustomization(page: Int? = null) {
         up()
     }
     waitForIdle()
-    onNodeWithTag("empty-space-customize").performClick()
+    onNodeWithTag("edit-settings").performClick()
 }

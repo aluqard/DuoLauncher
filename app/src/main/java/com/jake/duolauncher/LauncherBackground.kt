@@ -177,6 +177,29 @@ class LauncherBackgroundController(
 
     fun clearMessage() { errorMessage = null; successMessage = null }
 
+    /** Copies the committed photo for a look preset. Returns false when the dunes default is in use. */
+    fun snapshotTo(target: File): Boolean {
+        if (!launcherBackgroundEnabled(activity)) { target.delete(); return false }
+        return runCatching { launcherBackgroundFile(activity).copyTo(target, overwrite = true); true }.getOrDefault(false)
+    }
+
+    /** Applies a look preset's photo (or the dunes default for null) through the same commit path as a picked photo. */
+    fun applyFromFile(source: File?) {
+        if (source == null) { reset(); return }
+        if (previewPending || pickerPending) return
+        val temp = File(activity.filesDir, "preset-background.tmp")
+        runCatching {
+            source.copyTo(temp, overwrite = true)
+            val bitmap = BitmapFactory.decodeFile(temp.absolutePath) ?: error("Preset photo is unreadable")
+            java.nio.file.Files.move(temp.toPath(), launcherBackgroundFile(activity).toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            val identity = "preset-" + UUID.randomUUID()
+            prefs.edit().putBoolean(BACKGROUND_ENABLED, true).putString(BACKGROUND_ID, identity).apply()
+            LauncherBackgroundCache.changed(bitmap, identity)
+            photoSelected = true
+        }.onFailure { temp.delete(); errorMessage = it.message ?: "The preset background could not be applied." }
+    }
+
     fun cancelPendingSelection() {
         if (!pickerPending) return
         generation++; loading = false; clearPickerPending()

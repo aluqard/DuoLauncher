@@ -29,6 +29,16 @@ import androidx.core.content.ContextCompat
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.collectLatest
 
 class MainActivity : ComponentActivity() {
     private val model: LauncherModel by viewModels()
@@ -39,6 +49,7 @@ class MainActivity : ComponentActivity() {
         private set
     private val homeRequests = mutableIntStateOf(0)
     private val searchRequests = mutableIntStateOf(0)
+    private val mainPageRequests = mutableIntStateOf(0)
     private val defaultHome = mutableStateOf(false)
     private val showFirstRun = mutableStateOf(false)
     private lateinit var setupExperience: SetupExperience
@@ -49,7 +60,7 @@ class MainActivity : ComponentActivity() {
     private var appearanceLocationCancellation: CancellationSignal? = null
     private var timeReceiverRegistered = false
     private val timeReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) { appearance.refresh(systemDark()) }
+        override fun onReceive(context: Context?, intent: Intent?) { appearance.refresh(systemDark()); applyScheduledLook() }
     }
     private val locationPermission = activityResultRegistry.register("duo.appearance.location", this,
         ActivityResultContracts.RequestPermission(), permissionResult@{ granted ->
@@ -90,7 +101,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state = model.state.collectAsStateWithLifecycle().value
             val deviceStatus = status.state.collectAsStateWithLifecycle().value
+            val badgesOn = BadgeStore.enabled(this).collectAsStateWithLifecycle().value
+            val badgeCounts = BadgeStore.state.collectAsStateWithLifecycle().value
             DuoTheme(appearance.state.dark) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalDeviceStatus provides deviceStatus, LocalLauncherModel provides model,
+                    LocalBadges provides if (badgesOn) badgeCounts else emptyMap()) {
                 LauncherScreen(state, model, widgets, homeRequests.intValue,
                     onLaunch = { launchApp(it) }, onMakeDefault = ::makeDefault, onAppInfo = ::appInfo,
                     isDefaultHome = defaultHome.value, deviceStatus = deviceStatus, onStatusMode = ::setStatusMode, onWallpaperPreview = ::previewWallpaper,
@@ -103,10 +118,53 @@ class MainActivity : ComponentActivity() {
                     onAppearanceClear = { cancelAppearanceLocation(); appearance.clearLocation(systemDark()) },
                     showFirstRun = showFirstRun.value,
                     onFinishFirstRun = ::finishFirstRun,
-                    onShadeSetup = ::showShadeSetup)
+                    onShadeSetup = ::showShadeSetup,
+                    onUninstall = { app -> openSystemSettings(uninstallIntent(app), "uninstall") },
+                    mainPageRequests = mainPageRequests.intValue)
+                }
             }
         }
         FoldRenderExperiment.attach(this)
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                PinInbox.pending.collect { pending -> pending.forEach(::handlePin) }
+            }
+        }
+        val postures = PostureMonitor(this) { isCharging(this) }
+        lifecycleScope.launch {
+            // Stand mode opens from Home only, after the posture has held for a moment. Visible is enough:
+            // Live Discover's transparent window pauses Home without hiding it.
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                if (!postures.available) return@repeatOnLifecycle
+                postures.start()
+                try {
+                    postures.reading.map { classifyPosture(it) to it.charging }.distinctUntilChanged().collectLatest { (posture, charging) ->
+                        if (StandSession.suppressed != null && posture != StandSession.suppressed) StandSession.suppressed = null
+                        if (posture == StandSession.suppressed || StandSession.showing) return@collectLatest
+                        if (!shouldShowStand(posture, StandStore.load(this@MainActivity).value, charging)) return@collectLatest
+                        kotlinx.coroutines.delay(1500)
+                        openSystemSettings(Intent(this@MainActivity, StandActivity::class.java)
+                            .putExtra(StandActivity.EXTRA_POSTURE, posture.name), "stand-mode")
+                    }
+                } finally { postures.stop() }
+            }
+        }
+        AutoBackupStore.settings(this)
+        lifecycleScope.launch {
+            // Re-render icons when the icon theme changes or dark icons follow the appearance.
+            kotlinx.coroutines.flow.combine(ThemeStore.load(this@MainActivity),
+                androidx.compose.runtime.snapshotFlow { appearance.state.dark }) { theme, dark -> theme.iconKey(dark) }
+                .distinctUntilChanged().drop(1).collect { model.refresh() }
+        }
+        lifecycleScope.launch {
+            // Back up a few seconds after the layout or its settings stop changing.
+            model.state.filter { !it.loading }
+                .map { listOf(it.layout, it.compact, it.expanded, it.labels, it.googleSearch, it.verticalStatus, it.extras) }
+                .distinctUntilChanged().drop(1).debounce(3_000).collect {
+                    val raw = backups.snapshot() ?: return@collect
+                    withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { AutoBackupStore.save(this@MainActivity, raw) } }
+                }
+        }
         // Reassert the token after recreation (and after process restoration, where the
         // in-memory owner set is empty) before any external UI can uncover Discover.
         if (returningFromShadeSettings || restoreShadeDialog) ownShadeSetupExternally()
@@ -135,8 +193,21 @@ class MainActivity : ComponentActivity() {
         cancelAppearanceLocation()
         super.onDestroy()
     }
+    private var externalSettingsToken: String? = null
+
+    /** Opens a system settings screen while keeping Discover from covering it; released on return. */
+    internal fun openSystemSettings(intent: Intent, token: String): Boolean {
+        externalSettingsToken?.let { LiveDiscover.setExternalResultPending(this, "main", it, false) }
+        externalSettingsToken = token
+        LiveDiscover.setExternalResultPending(this, "main", token, true)
+        return runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }.getOrElse {
+            LiveDiscover.setExternalResultPending(this, "main", token, false); externalSettingsToken = null; false
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        externalSettingsToken?.let { LiveDiscover.setExternalResultPending(this, "main", it, false); externalSettingsToken = null }
         if (returningFromShadeSettings) {
             returningFromShadeSettings = false
             releaseShadeSetupOwnership()
@@ -205,7 +276,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) setStatusMode(model.state.value.verticalStatus)
+        if (hasFocus) setStatusMode(lastStatusMode ?: model.state.value.verticalStatus)
     }
     override fun onSaveInstanceState(outState: Bundle) {
         widgets.save(outState)
@@ -218,6 +289,9 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         FoldRenderExperiment.onNewIntent(this, intent)
         if (intent.getStringExtra("duo_destination") == "search") searchRequests.intValue++
+        // Home pressed while Home is already in front goes to the main page; returning from an app keeps the page.
+        else if (intent.hasCategory(Intent.CATEGORY_HOME) && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+            mainPageRequests.intValue++
         else if (intent.hasCategory(Intent.CATEGORY_HOME) || intent.getStringExtra("duo_destination") == "home") homeRequests.intValue++
         intent.removeExtra("duo_destination")
     }
@@ -227,11 +301,51 @@ class MainActivity : ComponentActivity() {
         if (!widgets.onActivityResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
     }
 
+    /** Places a shortcut or widget that another app asked to add, after the user confirmed it. */
+    /** Applies the look whose schedule fired most recently, once per trigger, so manual changes stick until the next one. */
+    private fun applyScheduledLook() {
+        val presets = LookPresetStore.presets(this).value
+        val (id, at) = latestScheduledTrigger(presets, java.time.LocalDateTime.now()) ?: return
+        val trigger = "$id@$at"
+        if (LookPresetStore.lastAppliedTrigger(this) == trigger) return
+        LookPresetStore.markApplied(this, trigger)
+        presets.firstOrNull { it.id == id }?.let { applyLookPreset(this, it, model, backgrounds) }
+    }
+
+    private fun handlePin(pin: PendingPin) {
+        PinInbox.take(pin)
+        when (pin) {
+            is PendingPin.Shortcut -> model.placeOnHome(pin.id)
+            is PendingPin.Widget -> {
+                val info = runCatching { pin.request.getAppWidgetProviderInfo(this) }.getOrNull() ?: return
+                val density = resources.displayMetrics.density
+                fun cells(target: Int, minPx: Int, limit: Int) = (target.takeIf { it > 0 }
+                    ?: ((minPx / density + 16f) / 84f).toInt().coerceAtLeast(1)).coerceIn(1, limit)
+                val spanX = cells(info.targetCellWidth, info.minWidth, GRID_COLUMNS)
+                val spanY = cells(info.targetCellHeight, info.minHeight, GRID_ROWS)
+                val layout = model.state.value.layout
+                val slot = model.nextWidgetSlot()
+                val index = (0..layout.pageCount).asSequence()
+                    .mapNotNull { page -> nearestWidgetAnchor(layout, slot, page, 0, spanX, spanY) }.firstOrNull()
+                if (index == null) { Toast.makeText(this, "There is no room for this widget on Home.", Toast.LENGTH_LONG).show(); return }
+                val id = acceptWidgetPin(widgets, pin.request) ?: return
+                val local = homeCellLocal(index)
+                val placed = model.placeWidget(WidgetPlacement(slot, id, homeCellPage(index), local % GRID_COLUMNS,
+                    local / GRID_COLUMNS, spanX, spanY))
+                if (!placed) widgets.host.deleteAppWidgetId(id)
+            }
+        }
+    }
+
     private fun launchApp(app: AppEntry, bounds: android.graphics.Rect? = null) {
         try {
             val user = getSystemService(UserManager::class.java).getUserForSerialNumber(app.userSerial)
                 ?: throw IllegalStateException("Profile is unavailable")
-            getSystemService(LauncherApps::class.java).startMainActivity(app.component, user, screenBounds(bounds), launchOptions(bounds))
+            val launcherApps = getSystemService(LauncherApps::class.java)
+            if (app.shortcutId == null) RecentApps.launched(this, app.id)
+            val shortcut = app.shortcutId
+            if (shortcut != null) launcherApps.startShortcut(app.packageName, shortcut, screenBounds(bounds), launchOptions(bounds), user)
+            else launcherApps.startMainActivity(app.component, user, screenBounds(bounds), launchOptions(bounds))
         } catch (_: Exception) { Toast.makeText(this, "${app.label} is unavailable.", Toast.LENGTH_SHORT).show(); model.refresh() }
     }
 
@@ -358,7 +472,10 @@ class MainActivity : ComponentActivity() {
         LiveDiscover.setExternalResultPending(this, "main", "appearance-location", false)
     }
 
+    private var lastStatusMode: Boolean? = null
+
     private fun setStatusMode(vertical: Boolean) {
+        lastStatusMode = vertical
         LiveDiscover.host.get()?.statusMode(vertical)
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE

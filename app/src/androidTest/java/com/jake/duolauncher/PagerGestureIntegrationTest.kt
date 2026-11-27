@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import androidx.compose.ui.geometry.Offset
@@ -28,7 +30,7 @@ class PagerGestureIntegrationTest {
         check(android.os.Build.HARDWARE in listOf("ranchu", "goldfish"))
         compose.waitUntil(15000) { !ViewModelProvider(compose.activity)[LauncherModel::class.java].state.value.loading }
         // Starting at the library also works when the saved workspace has several home pages.
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.waitForIdle()
     }
     private fun page() = pager().fetchSemanticsNode().config[SemanticsProperties.StateDescription]

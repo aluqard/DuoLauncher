@@ -108,6 +108,19 @@ class BackupController(
     }
 
     fun cancelImport() = clearTransaction()
+
+    /** The current layout as backup JSON, or null when a widget cannot be described right now. */
+    fun snapshot(): String? = runCatching { model.state.value.let { encodeLayoutBackup(it, widgetDescriptors(it), scope) } }.getOrNull()
+
+    /** Shows the restore review for a backup that is already on this device (automatic backups). */
+    fun previewRaw(raw: String) {
+        generation++
+        preview = null; errorMessage = null; successMessage = null
+        operation = OP_PREVIEW; importRaw = raw; pickerPending = false
+        store.edit().clear().putString(KEY_OPERATION, OP_PREVIEW).putString(KEY_PREVIEW, raw).apply()
+        onExternalResultChanged(true)
+        parsePreview(raw, persist = false)
+    }
     fun clearMessage() { errorMessage = null; successMessage = null }
 
     fun resumePendingPicker(): Boolean = when (operation) {

@@ -5,7 +5,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-const val LAYOUT_BACKUP_VERSION = 2
+const val LAYOUT_BACKUP_VERSION = 3
 const val MAX_LAYOUT_BACKUP_BYTES = 2 * 1024 * 1024
 private const val MAX_BACKUP_HOME_CELLS = HOME_CELLS * 100
 
@@ -31,6 +31,7 @@ data class LayoutImportPreview(
     val labels: Boolean,
     val googleSearch: Boolean,
     val verticalStatus: Boolean,
+    val extras: LauncherExtras = LauncherExtras(),
 )
 
 fun layoutBackupScope(context: Context): String {
@@ -53,7 +54,7 @@ fun encodeLayoutBackup(state: LauncherState, widgetDescriptors: List<BackupWidge
         val item = JSONObject().put("slot", placement.slot).put("page", placement.page)
             .put("column", placement.column).put("row", placement.row).put("spanX", placement.spanX).put("spanY", placement.spanY)
         when {
-            placement.id in setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET) -> item.put("builtinId", placement.id)
+            placement.id in BUILTIN_WIDGETS -> item.put("builtinId", placement.id)
             saved != null -> item.put("provider", saved.providerComponent).put("userSerial", saved.userSerial)
                 .put("title", saved.title).put("profileLabel", saved.profileLabel).put("work", saved.isWork)
                 .put("sourceScope", exportedWidgetScope(saved, sourceScope))
@@ -66,9 +67,14 @@ fun encodeLayoutBackup(state: LauncherState, widgetDescriptors: List<BackupWidge
     } }
     fun preset(value: LayoutPreset) = JSONObject().put("iconSize", value.iconSize).put("rowGap", value.rowGap)
         .put("dockWidth", value.dockWidth).put("dockPosition", value.dockPosition).put("dockAlignToGrid", value.dockAlignToGrid)
-    return JSONObject().put("version", LAYOUT_BACKUP_VERSION).put("sourceScope", sourceScope).put("apps", apps)
-        .put("homeSlots", JSONArray(state.homeSlots)).put("leadingSlots", JSONArray(state.leadingSlots))
-        .put("dock", JSONArray(state.dock)).put("folders", folders).put("widgets", widgets)
+        .put("dockSide", value.dockSide.name).put("topMargin", value.topMargin)
+    val liveSlots = state.widgetPlacements.mapTo(mutableSetOf()) { it.slot }
+    val extras = state.extras.copy(widgetContent = state.extras.widgetContent.filterKeys { it in liveSlots })
+    return encodeLauncherExtras(extras, JSONObject()).put("version", LAYOUT_BACKUP_VERSION).put("sourceScope", sourceScope).put("apps", apps)
+        // Pinned shortcuts belong to Android pin records on this device, so backups leave their cells empty.
+        .put("homeSlots", JSONArray(state.homeSlots.map { it?.takeUnless(::isShortcutId) }))
+        .put("leadingSlots", JSONArray(state.leadingSlots.map { it?.takeUnless(::isShortcutId) }))
+        .put("dock", JSONArray(state.dock.map { it?.takeUnless(::isShortcutId) })).put("folders", folders).put("widgets", widgets)
         .put("labels", state.labels).put("googleSearch", state.googleSearch).put("verticalStatus", state.verticalStatus)
         .put("compact", preset(state.compact)).put("expanded", preset(state.expanded)).toString(2)
 }
@@ -155,7 +161,7 @@ fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles
         val builtin = if (item.has("builtinId")) item.strictInt("builtinId") else null
         val provider = item.optString("provider").takeIf(String::isNotBlank)
         val id = if (builtin != null) {
-            require(builtin in setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET)); builtin
+            require(builtin in BUILTIN_WIDGETS); builtin
         } else NEEDS_BINDING_WIDGET
         val placement = WidgetPlacement(slot, id, item.strictInt("page"), item.strictInt("column"), item.strictInt("row"),
             item.strictInt("spanX"), item.strictInt("spanY"))
@@ -177,8 +183,11 @@ fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles
     }
     fun preset(key: String): LayoutPreset {
         val item = root.getJSONObject(key)
+        val side = if (version >= 3) DockSide.entries.firstOrNull { it.name == item.getString("dockSide") }
+            ?: error("Invalid dock side") else DockSide.RIGHT
         val loaded = LayoutPreset(item.strictFloat("iconSize"), item.strictFloat("rowGap"),
-            item.strictFloat("dockWidth"), item.strictFloat("dockPosition"), item.strictBoolean("dockAlignToGrid"))
+            item.strictFloat("dockWidth"), item.strictFloat("dockPosition"), item.strictBoolean("dockAlignToGrid"), side,
+            if (item.has("topMargin")) item.strictFloat("topMargin") else AUTO_TOP_MARGIN)
         require(loaded == loaded.sanitized()) { "Invalid layout preset" }
         return loaded
     }
@@ -186,11 +195,15 @@ fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles
     val compact = preset("compact"); val expanded = preset("expanded")
     val labels = root.strictBoolean("labels"); val googleSearch = root.strictBoolean("googleSearch")
     val verticalStatus = root.strictBoolean("verticalStatus")
+    val importedIds = (slots + leadingSlots + dock).filterNotNull().toSet() + folders.flatMap(FolderEntry::appIds) + available
+    val extras = if (version >= 3) decodeLauncherExtras(root).pruned(importedIds,
+        layout.widgetPlacements.mapTo(mutableSetOf()) { it.slot }, layout.pageCount) else LauncherExtras()
     return LayoutImportPreview(layout, missing.toList(), profileIssues.toList(),
         appCount = (slots + leadingSlots).count { it != null && !isReservedFolderId(it) } +
             dock.count { it != null } + folders.sumOf { it.appIds.size },
         folderCount = folders.size, widgetCount = layout.widgetPlacements.size,
-        compact = compact, expanded = expanded, labels = labels, googleSearch = googleSearch, verticalStatus = verticalStatus)
+        compact = compact, expanded = expanded, labels = labels, googleSearch = googleSearch, verticalStatus = verticalStatus,
+        extras = extras)
 }
 
 internal fun validBackupPlacement(value: WidgetPlacement): Boolean {

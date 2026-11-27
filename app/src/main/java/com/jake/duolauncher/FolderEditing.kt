@@ -94,3 +94,47 @@ fun reconcileFolders(layout: HomeLayout, removedAppIds: Set<String>): HomeLayout
 
 private fun widgetCellsForFolders(layout: HomeLayout) = layout.widgetPlacements
     .flatMapTo(mutableSetOf()) { it.coveredIndices() }
+
+/** Removes an app from Home, the unfolded-only page, the dock and any folder (dissolving a folder left with one app). */
+fun removeAppEverywhere(layout: HomeLayout, id: String): HomeLayout {
+    val folder = layout.folders.firstOrNull { id in it.appIds }
+    val base = folder?.let { removeAppFromFolder(layout, it.id, id, DropTarget.Remove) } ?: layout
+    return base.withoutShortcut(id)
+}
+
+/** Removes every selected shortcut from Home, the unfolded-only page and the dock in one step. */
+fun bulkRemove(layout: HomeLayout, ids: Collection<String>): HomeLayout =
+    ids.fold(layout) { next, id -> if (isReservedFolderId(id)) next else next.withoutShortcut(id) }
+
+/** Free Home cells on [page] in reading order (not covered by a widget and empty). */
+fun freeCells(layout: HomeLayout, page: Int): List<Int> {
+    val blocked = layout.widgetPlacements.flatMapTo(mutableSetOf()) { it.coveredIndices() }
+    return (0 until HOME_CELLS).map { homeCellIndex(page, it) }.filter { it !in blocked && layout.slotAt(it) == null }
+}
+
+/**
+ * Moves the selected items to [page] in selection order, filling its free cells. Items that do not
+ * fit stay where they were; the returned count says how many moved.
+ */
+fun bulkMoveToPage(layout: HomeLayout, ids: List<String>, page: Int): Pair<HomeLayout, Int> {
+    var next = layout
+    var moved = 0
+    ids.filter { layout.indexOfShortcut(it)?.let(::homeCellPage) != page }.forEach { id ->
+        val cell = freeCells(next, page).firstOrNull() ?: return next to moved
+        val from = next.indexOfShortcut(id) ?: return@forEach
+        next = next.withSlot(from, null).withSlot(cell, id)
+        moved++
+    }
+    return next to moved
+}
+
+/** Makes one folder from the selected apps at the first selected app's cell. Needs at least two apps. */
+fun bulkFolder(layout: HomeLayout, ids: List<String>, folder: FolderEntry): HomeLayout {
+    val apps = ids.filterNot(::isReservedFolderId).distinct()
+    if (apps.size < 2) return layout
+    val target = layout.indexOfShortcut(apps[0]) ?: return layout
+    var next = createFolder(layout, folder, apps[0], apps[1], target)
+    if (next == layout) return layout
+    apps.drop(2).forEach { next = addAppToFolder(next, folder.id, it) }
+    return next
+}

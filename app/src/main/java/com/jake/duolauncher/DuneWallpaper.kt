@@ -13,6 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntOffset
@@ -35,7 +39,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 
 @Composable
-internal fun DuneWallpaper(modifier: Modifier = Modifier.fillMaxSize()) {
+internal fun DuneWallpaper(modifier: Modifier = Modifier.fillMaxSize(), live: Boolean = false) {
     val palette = LocalDuoPalette.current
     val context = LocalContext.current.applicationContext
     val revision = LauncherBackgroundCache.revision.intValue
@@ -43,7 +47,24 @@ internal fun DuneWallpaper(modifier: Modifier = Modifier.fillMaxSize()) {
     val photo = produceState(initialValue = initial, key1 = context, key2 = revision) {
         value = withContext(Dispatchers.IO) { loadLauncherBackground(context) }
     }.value
-    Canvas(modifier) { drawLauncherBackground(photo?.asImageBitmap(), palette.dark) }
+    if (!live) { Canvas(modifier) { drawLauncherBackground(photo?.asImageBitmap(), palette.dark) }; return }
+    // Home's own background: the folded screen may show its own photo, and the image can drift with tilt.
+    val settings by WallpaperStore.load(context).collectAsState()
+    val folded = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 650
+    val coverRevision = CoverBackground.revision.intValue
+    val cover = if (folded && settings.coverPhoto) produceState(CoverBackground.peek(), coverRevision) {
+        value = withContext(Dispatchers.IO) { CoverBackground.load(context) }
+    }.value else null
+    val shown = cover ?: photo
+    val tilt = if (settings.motion) rememberTilt() else null
+    val shift = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.toPx() }
+    Canvas(modifier.graphicsLayer {
+        val t = tilt?.value ?: return@graphicsLayer
+        // Enlarge just enough that the shifted image never shows an edge.
+        val zoom = 1f + 2f * shift / size.minDimension.coerceAtLeast(1f)
+        scaleX = zoom; scaleY = zoom
+        translationX = t.x * shift; translationY = -t.y * shift
+    }) { drawLauncherBackground(shown?.asImageBitmap(), palette.dark) }
 }
 
 internal fun DrawScope.drawLauncherBackground(photo: ImageBitmap?, dark: Boolean = false) {

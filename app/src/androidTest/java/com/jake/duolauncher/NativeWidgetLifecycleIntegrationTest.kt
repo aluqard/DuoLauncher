@@ -64,6 +64,23 @@ class NativeWidgetLifecycleIntegrationTest {
         return automation.windows.firstNotNullOfOrNull { visit(it.root) }
     }
 
+    /** Runs a page-indicator accessibility action ("Discover" or "All apps page"); the dots have no buttons for them. */
+    private fun pageAction(label: String) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 10_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction? {
+                if (node == null) return null
+                node.actionList.firstOrNull { it.label?.toString() == label }?.let { action ->
+                    node.performAction(action.id); return action }
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            if (find(automation.rootInActiveWindow) != null) return
+            android.os.SystemClock.sleep(100)
+        }
+        error("No page action $label")
+    }
+
     private fun click(value: String) {
         automation.serviceInfo = automation.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -185,7 +202,7 @@ class NativeWidgetLifecycleIntegrationTest {
             typeWidgetSearch(provider.loadLabel(main.packageManager).toString())
             click(provider.loadLabel(main.packageManager).toString())
             await { find("Ready to place")?.isVisibleToUser == true }
-            click("Place")
+            click("Add")
             await { automation.rootInActiveWindow?.packageName == "com.android.settings" }
             await { widgets.pendingPlacement?.slot == slot }
             val bindCanceledId = requireNotNull(widgets.pendingPlacement).id
@@ -201,7 +218,7 @@ class NativeWidgetLifecycleIntegrationTest {
             typeWidgetSearch(provider.loadLabel(main.packageManager).toString())
             click(provider.loadLabel(main.packageManager).toString())
             await { find("Ready to place")?.isVisibleToUser == true }
-            click("Place")
+            click("Add")
             await { automation.rootInActiveWindow?.packageName == "com.android.settings" }
             click("Always allow Duo Launcher to create widgets and access their data")
             click("Create")
@@ -241,7 +258,7 @@ class NativeWidgetLifecycleIntegrationTest {
             typeWidgetSearch(provider.loadLabel(main.packageManager).toString())
             click(provider.loadLabel(main.packageManager).toString())
             await { find("Ready to place")?.isVisibleToUser == true }
-            click("Place")
+            click("Add")
             await { automation.rootInActiveWindow?.packageName == "com.jake.duolauncher.test" }
             await { widgets.pendingPlacement?.slot == slot }
             val committedId = requireNotNull(widgets.pendingPlacement).id
@@ -257,7 +274,7 @@ class NativeWidgetLifecycleIntegrationTest {
             assertFalse("Successful bind/configure results must not remain queued above MainActivity",
                 activityDump.contains("ResultInfo{who=null, request=701") || activityDump.contains("ResultInfo{who=null, request=700"))
 
-            click("Discover")
+            pageAction("Discover")
             await(20_000) { LiveDiscover.progress >= .99f && LiveDiscover.message.value == null }
             click("Back to home")
             await { LiveDiscover.progress == 0f }

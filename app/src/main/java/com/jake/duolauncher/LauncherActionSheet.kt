@@ -52,14 +52,15 @@ internal fun LauncherAppActionSheet(app: AppEntry, placed: Boolean, homePages: I
     moving: Boolean, onMoving: (Boolean) -> Unit,
     onAddOrRemove: () -> Unit, onMoveFirst: () -> Unit, onMoveEarlier: () -> Unit, onMoveLater: () -> Unit,
     onMovePage: (Int) -> Unit, onInfo: () -> Unit, onWidgets: (() -> Unit)?, onCreateFolder: () -> Unit,
-    onClose: () -> Unit) {
+    onClose: () -> Unit, onEdit: () -> Unit = {}, onHide: () -> Unit = {}, onUninstall: (() -> Unit)? = null,
+    onCategory: (() -> Unit)? = null) {
     ModalDialogBackHandler { if (moving) onMoving(false) else onClose() }
     val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * .88f).toDp() }
     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState())
         .padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
             if (moving) IconButton(onClick = { onMoving(false) }) { Icon(Icons.Rounded.ArrowBack, "Back") }
-            Image(app.icon.asImageBitmap(), null, Modifier.size(48.dp).clip(RoundedCornerShape(13.dp)))
+            Image(app.icon.asImageBitmap(), null, Modifier.size(48.dp).clip(LocalIconShape.current))
             Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) {
                 Text(if (moving) "Move ${app.label}" else app.label, style = MaterialTheme.typography.titleLarge)
                 Text("${app.profileLabel} profile", style = MaterialTheme.typography.bodySmall,
@@ -79,31 +80,18 @@ internal fun LauncherAppActionSheet(app: AppEntry, placed: Boolean, homePages: I
             else ActionRow(Icons.Rounded.Home, "Add to Home", onAddOrRemove)
             onWidgets?.let { ActionRow(Icons.Rounded.Widgets, "Widgets", it) }
             ActionRow(Icons.Rounded.CreateNewFolder, "Create folder", onCreateFolder)
+            ActionRow(Icons.Rounded.Edit, "Edit icon & name", onEdit, Modifier.testTag("app-action-edit"))
             ActionRow(Icons.Rounded.Info, "App info", onInfo)
+            onCategory?.let { ActionRow(Icons.Rounded.Category, "Change category", it, Modifier.testTag("app-action-category")) }
+            ActionRow(Icons.Rounded.VisibilityOff, "Hide app", onHide, Modifier.testTag("app-action-hide"))
             if (placed) {
                 Spacer(Modifier.height(10.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp))
                 ActionRow(Icons.Rounded.RemoveCircleOutline, "Remove from Home", onAddOrRemove,
                     tint = MaterialTheme.colorScheme.error)
             }
+            onUninstall?.let { ActionRow(Icons.Rounded.Delete, "Uninstall", it, Modifier.testTag("app-action-uninstall"),
+                tint = MaterialTheme.colorScheme.error) }
         }
-    }
-}
-
-@Composable
-internal fun EmptySpaceActionSheet(onWidgets: () -> Unit, onWallpaper: () -> Unit,
-    onCustomize: () -> Unit, onClose: () -> Unit) {
-    val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * .75f).toDp() }
-    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState())
-        .padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Add to Home", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close empty space options") }
-        }
-        Text("Choose what belongs in this space.", style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-        ActionRow(Icons.Rounded.Widgets, "Widgets", onWidgets, Modifier.testTag("empty-space-widgets"))
-        ActionRow(Icons.Rounded.Wallpaper, "Wallpaper", onWallpaper, Modifier.testTag("empty-space-wallpaper"))
-        ActionRow(Icons.Rounded.Tune, "Customize launcher", onCustomize, Modifier.testTag("empty-space-customize"))
     }
 }
 

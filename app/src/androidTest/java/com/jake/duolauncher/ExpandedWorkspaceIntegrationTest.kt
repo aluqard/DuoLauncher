@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import android.appwidget.AppWidgetHost
@@ -300,7 +302,7 @@ class ExpandedWorkspaceIntegrationTest {
             assertEquals(saved, preferences())
             assertEquals(innerDock, compose.onNodeWithTag("dock").fetchSemanticsNode().boundsInRoot)
 
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             waitForPage("All apps")
             val library = compose.onNodeWithTag("library-page").fetchSemanticsNode().boundsInRoot
             val viewport = pager().fetchSemanticsNode().boundsInRoot

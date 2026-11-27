@@ -150,7 +150,7 @@ class WeatherWidgetIntegrationTest {
         typeSearch(pm.getApplicationLabel(pm.getApplicationInfo(provider.provider.packageName, 0)).toString())
         val label = provider.loadLabel(pm).toString()
         await { find(label)?.isVisibleToUser == true }; click(label)
-        await { find("Ready to place")?.isVisibleToUser == true }; click("Place")
+        await { find("Ready to place")?.isVisibleToUser == true }; click("Add")
         await { model.placement(slot)?.id?.let { it >= 0 } == true }
         return requireNotNull(model.placement(slot)).also {
             assertEquals(expectedIndex, it.page * HOME_CELLS + it.row * GRID_COLUMNS + it.column)

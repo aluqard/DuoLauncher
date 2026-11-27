@@ -10,3 +10,4 @@ internal fun googleSearchIntent() = Intent(SearchManager.INTENT_ACTION_GLOBAL_SE
     .putExtra(SearchManager.QUERY, "")
     .putExtra(SearchManager.APP_DATA, Bundle().apply { putString("source", "launcher-search") })
 
+

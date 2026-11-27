@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import androidx.compose.ui.test.*
@@ -55,7 +57,7 @@ class LauncherIntegrationTest {
         val originalSize = Regex("Override size: (\\d+x\\d+)").find(shell("wm size"))?.groupValues?.get(1)
         val prior = model().state.value
         try {
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTextInput("Clock")
             for (size in listOf("1248x1972", "2448x1848", "1248x1972")) {
                 shell("wm size $size")
@@ -98,7 +100,7 @@ class LauncherIntegrationTest {
             shell("settings put secure show_ime_with_hard_keyboard 1")
             // A floating handwriting toolbar reports IME-visible without reducing app height.
             shell("settings put secure stylus_handwriting_enabled 0")
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             compose.onNodeWithTag("library-search").performTouchInput { click() }
             compose.onNodeWithTag("library-search").performTextInput("Clock")
             var lastGeometry: List<Int>? = null
@@ -149,7 +151,7 @@ class LauncherIntegrationTest {
 
     @Test fun searchOpensFinalPageAndFiltersInstalledApps() {
         ready()
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.waitForIdle()
         assertPage("All apps")
         compose.onNodeWithTag("library-search").performTextInput("zzzz-no-such-app-123")
@@ -161,7 +163,7 @@ class LauncherIntegrationTest {
     @Test fun normalAllAppsUsesFullWidthRowsWithoutPinsOrNumberedDockActions() {
         ready()
         val app = model().state.value.apps.first()
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.onNodeWithTag("library-search").performTextInput(app.label)
         compose.onNodeWithTag("pin-${app.id}").assertDoesNotExist()
         compose.runOnIdle {
@@ -286,7 +288,7 @@ class LauncherIntegrationTest {
             compose.activityRule.scenario.recreate()
             ready()
             compose.onNodeWithTag("add-home-apps").assertDoesNotExist()
-            compose.onNodeWithTag("library-page-link").performClick()
+            compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
             assertPage("All apps")
         } finally { compose.runOnIdle { prior.forEach { model().setPinned(it, true) } } }
     }

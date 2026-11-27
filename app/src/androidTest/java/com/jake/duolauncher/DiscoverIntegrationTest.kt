@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+
 package com.jake.duolauncher
 
 import androidx.compose.ui.test.*
@@ -22,7 +24,7 @@ class DiscoverIntegrationTest {
         ready()
         val before = model().state.value
         val homeDock = compose.onNodeWithTag("dock").fetchSemanticsNode().boundsInWindow
-        compose.onNodeWithTag("discover-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("Discover")
         assertPage("Discover")
         assertEquals(homeDock, compose.onNodeWithTag("dock").fetchSemanticsNode().boundsInWindow)
         compose.onNodeWithTag("discover-home").performClick()
@@ -36,7 +38,7 @@ class DiscoverIntegrationTest {
         ready()
         compose.onNodeWithTag("app-pager").performTouchInput { swipeRight() }
         assertPage("Discover")
-        compose.onNodeWithTag("library-page-link").performClick()
+        compose.onNodeWithTag("page-indicator").performCustomAccessibilityActionWithLabel("All apps page")
         compose.onNodeWithTag("library-search").assertIsDisplayed()
         for (slot in 0..3) compose.onNodeWithTag("dock-slot-$slot").assertIsDisplayed()
     }

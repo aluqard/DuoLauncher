@@ -42,6 +42,23 @@ class HomeReturnIntegrationTest {
         return automation.windows.firstNotNullOfOrNull { find(it.root) }
     }
 
+    /** Runs a page-indicator accessibility action ("Discover" or "All apps page"); the dots have no buttons for them. */
+    private fun pageAction(label: String) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 10_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction? {
+                if (node == null) return null
+                node.actionList.firstOrNull { it.label?.toString() == label }?.let { action ->
+                    node.performAction(action.id); return action }
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            if (find(automation.rootInActiveWindow) != null) return
+            android.os.SystemClock.sleep(100)
+        }
+        error("No page action $label")
+    }
+
     private fun click(description: String) {
         var bounds: android.graphics.Rect? = null
         var stableSince = 0L
@@ -141,12 +158,12 @@ class HomeReturnIntegrationTest {
             assertNotSame(oldOwner, LiveDiscover.owner.get())
             waitForReturnedPage(expected)
 
-            click("All apps page")
+            pageAction("All apps page")
             await { node("All apps", state = true)?.isVisibleToUser == true }
             shell("input keyevent KEYCODE_HOME")
             waitForReturnedPage(expected)
 
-            click("Discover")
+            pageAction("Discover")
             await { node("Discover", state = true)?.isVisibleToUser == true }
             shell("input keyevent KEYCODE_HOME")
             waitForReturnedPage(expected)

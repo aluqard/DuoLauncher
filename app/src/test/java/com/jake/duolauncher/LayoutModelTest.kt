@@ -114,4 +114,13 @@ class LayoutModelTest {
     @Test fun `home always has a page independently of the library`() {
         assertEquals(1, homePageCount(0)); assertEquals(1, homePageCount(24)); assertEquals(2, homePageCount(25))
     }
+
+    @Test fun `top margin is automatic until set, then fixed and kept in range`() {
+        val auto = homeGeometry(411f, 860f, LayoutPreset(dockSide = DockSide.BOTTOM), true)
+        assertTrue(auto.contentTop in 16f..72f)
+        assertEquals(100f, homeGeometry(411f, 860f, LayoutPreset(dockSide = DockSide.BOTTOM, topMargin = 100f), true).contentTop, .001f)
+        assertEquals(160f, LayoutPreset(topMargin = 400f).sanitized().topMargin, .001f)
+        assertEquals(8f, LayoutPreset(topMargin = 2f).sanitized().topMargin, .001f)
+        assertEquals(AUTO_TOP_MARGIN, LayoutPreset(topMargin = -5f).sanitized().topMargin, .001f)
+    }
 }

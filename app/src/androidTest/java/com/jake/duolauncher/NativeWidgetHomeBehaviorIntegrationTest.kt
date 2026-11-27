@@ -38,6 +38,23 @@ class NativeWidgetHomeBehaviorIntegrationTest {
         }
         return automation.windows.firstNotNullOfOrNull { visit(it.root) }
     }
+    /** Runs a page-indicator accessibility action ("Discover" or "All apps page"); the dots have no buttons for them. */
+    private fun pageAction(label: String) {
+        val deadline = android.os.SystemClock.uptimeMillis() + 10_000L
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction? {
+                if (node == null) return null
+                node.actionList.firstOrNull { it.label?.toString() == label }?.let { action ->
+                    node.performAction(action.id); return action }
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            if (find(automation.rootInActiveWindow) != null) return
+            android.os.SystemClock.sleep(100)
+        }
+        error("No page action $label")
+    }
+
     private fun click(value: String) {
         var target: AccessibilityNodeInfo? = null
         await {
@@ -148,7 +165,7 @@ class NativeWidgetHomeBehaviorIntegrationTest {
             clickAfterScrolling("Add widget to this page")
             val label = provider.loadLabel(main.packageManager).toString()
             search(label); await { find(label)?.isVisibleToUser == true }; click(label)
-            await { find("Ready to place")?.isVisibleToUser == true }; click("Place")
+            await { find("Ready to place")?.isVisibleToUser == true }; click("Add")
             await { automation.rootInActiveWindow?.packageName == "com.jake.duolauncher.test" }
             await { widgets.pendingPlacement?.slot == slot }
             val assignedId = requireNotNull(widgets.pendingPlacement).id
@@ -200,7 +217,7 @@ class NativeWidgetHomeBehaviorIntegrationTest {
                 assertEquals(assignedId, model.placement(slot)?.id)
             }
             assertFalse(shell("dumpsys activity activities").contains("ResultInfo{who=null, request=701"))
-            click("Discover")
+            pageAction("Discover")
             await(20_000) { LiveDiscover.progress >= .99f && LiveDiscover.message.value == null }
             click("Back to home"); await { LiveDiscover.progress == 0f }
         } catch (failure: Throwable) {

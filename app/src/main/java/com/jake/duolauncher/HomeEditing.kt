@@ -8,6 +8,15 @@ const val CLOCK_WIDGET = -2
 const val DATE_WIDGET = -3
 const val INFO_WIDGET = -4
 const val NEEDS_BINDING_WIDGET = -5
+const val ANALOG_CLOCK_WIDGET = -6
+const val BATTERY_WIDGET = -7
+const val ALARM_WIDGET = -8
+const val MEMO_WIDGET = -9
+const val CHECKLIST_WIDGET = -10
+
+/** Launcher-drawn cards that need no Android widget binding. Backup accepts exactly these ids. */
+val BUILTIN_WIDGETS = setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET, ANALOG_CLOCK_WIDGET, BATTERY_WIDGET,
+    ALARM_WIDGET, MEMO_WIDGET, CHECKLIST_WIDGET)
 
 data class WidgetPlacement(val slot: Int, val id: Int, val page: Int, val column: Int, val row: Int, val spanX: Int, val spanY: Int)
 data class WidgetRestore(val slot: Int, val providerComponent: String, val userSerial: Long, val title: String,
@@ -123,6 +132,28 @@ fun widgetCandidate(layout: HomeLayout, slot: Int, targetIndex: Int, spanX: Int,
     if (layout.widgetPlacements.any { it.slot != slot && overlaps(it, candidate) }) return null
     if (candidate.coveredIndices().any { layout.slotAt(it) != null }) return null
     return candidate
+}
+
+/**
+ * Finds the free widget anchor on [page] closest to the grid position [local]; null when the span fits nowhere.
+ * With [covering], only rectangles that include [local] qualify, so a long-pressed cell stays inside the widget
+ * even when the span has to grow up or left from it.
+ */
+fun nearestWidgetAnchor(layout: HomeLayout, slot: Int, page: Int, local: Int, spanX: Int, spanY: Int,
+    covering: Boolean = false): Int? {
+    if (page < -1 || local !in 0 until HOME_CELLS) return null
+    val row = local / GRID_COLUMNS
+    val column = local % GRID_COLUMNS
+    return (0 until HOME_CELLS).filter { cell ->
+        val anchorRow = cell / GRID_COLUMNS
+        val anchorColumn = cell % GRID_COLUMNS
+        !covering || (row in anchorRow until anchorRow + spanY && column in anchorColumn until anchorColumn + spanX)
+    }.map { homeCellIndex(page, it) }
+        .filter { widgetCandidate(layout, slot, it, spanX, spanY) != null }
+        .minByOrNull { index ->
+            val cell = homeCellLocal(index)
+            kotlin.math.abs(cell / GRID_COLUMNS - row) + kotlin.math.abs(cell % GRID_COLUMNS - column)
+        }
 }
 
 /** Moves use insertion order and transfer shortcuts between Home and the dock. */
@@ -306,4 +337,23 @@ fun migrateSchema5Widgets(widgets: List<Int>): List<WidgetPlacement> = buildList
                 else add(WidgetPlacement(slot, id, page, 0, 6, 4, 4))
         }
     }
+}
+
+/**
+ * Rebuilds Home pages in [order] (old page numbers; negative entries are new empty pages). Pages left
+ * out are deleted with their apps and widgets; the unfolded-only page (-1) is untouched. Folder
+ * entries whose cell disappears are dropped. Empty pages at the end do not persist.
+ */
+fun remapPages(layout: HomeLayout, order: List<Int>): HomeLayout {
+    require(order.distinct().size == order.size && order.all { it < layout.pageCount } && order.isNotEmpty())
+    val padded = layout.slots + List(maxOf(0, layout.pageCount * HOME_CELLS - layout.slots.size)) { null }
+    val slots = order.flatMap { old -> if (old < 0) List(HOME_CELLS) { null } else padded.subList(old * HOME_CELLS, (old + 1) * HOME_CELLS) }
+    val widgets = layout.widgetPlacements.mapNotNull { placement ->
+        if (placement.page < 0) placement else order.indexOf(placement.page).takeIf { it >= 0 }?.let { placement.copy(page = it) }
+    }
+    val kept = (slots + layout.leadingSlots + layout.dock).filterNotNull().toSet()
+    val widgetSlots = widgets.mapTo(mutableSetOf()) { it.slot }
+    return layout.copy(slots = normalizeHomeSlots(slots), widgetPlacements = widgets,
+        folders = layout.folders.filter { it.id in kept },
+        widgetRestores = layout.widgetRestores.filter { it.slot in widgetSlots })
 }

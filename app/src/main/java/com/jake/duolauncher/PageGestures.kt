@@ -81,6 +81,7 @@ internal fun Modifier.onePageGestures(
     canStartDownwardSwipe: (Offset) -> Boolean = { true },
     onDownwardSwipe: ((ShadePanel) -> Unit)? = null,
     onLeadingOverscroll: (() -> Unit)? = null,
+    jelly: JellyStretch? = null,
 ) : Modifier {
     val currentEnabled by rememberUpdatedState(enabled)
     val currentCanStartDownwardSwipe by rememberUpdatedState(canStartDownwardSwipe)
@@ -88,7 +89,10 @@ internal fun Modifier.onePageGestures(
     val currentLeadingOverscroll by rememberUpdatedState(onLeadingOverscroll)
     return nestedScroll(limits).pointerInput(pager, limits, motion) {
         coroutineScope {
+            val gestureScope = this
             var motionJob: Job? = null
+            var jellyJob: Job? = null
+            fun releaseJelly() { if (jelly != null) jellyJob = gestureScope.launch { jelly.release() } }
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 val gestureEnabled = currentEnabled
@@ -146,6 +150,8 @@ internal fun Modifier.onePageGestures(
                                     break
                                 }
                                 motionJob?.cancel()
+                                jellyJob?.cancel()
+                                jelly?.width = size.width.toFloat()
                                 // Pointer input can outpace layout on a busy frame. Keep the
                                 // latest absolute drag position rather than queueing and replaying
                                 // every stale delta after the finger has already moved on.
@@ -159,18 +165,28 @@ internal fun Modifier.onePageGestures(
                                     try {
                                         pager.scroll(MutatePriority.UserInput) {
                                             with(pager) { updateTargetPage((anchor - sign(distance.x).toInt()).coerceIn(0, pager.pageCount - 1)) }
-                                            fun moveBy(pixels: Float) {
+                                            fun moveBy(pixels: Float, stretch: Boolean = false) {
                                                 val current = position()
                                                 val requested = motion?.positionAfterVisualDelta(current, pixels)
                                                     ?: (current + pixels / stride())
                                                 val allowed = boundedPagePosition(requested, anchor, pager.pageCount)
                                                 scrollBy((allowed - current) * stride())
+                                                // Dragging past the first or last page stretches the screen instead.
+                                                if (stretch && jelly != null) {
+                                                    val last = (pager.pageCount - 1).toFloat()
+                                                    jelly.pull(when {
+                                                        requested < 0f -> -requested * stride()
+                                                        requested > last -> (last - requested) * stride()
+                                                        else -> 0f
+                                                    })
+                                                }
                                             }
                                             val dragStartVisualOffset = visualOffset()
                                             for (dragPosition in channel) {
                                                 if (dragPosition != 0f) with(pager) { updateTargetPage((anchor - sign(dragPosition).toInt()).coerceIn(0, pager.pageCount - 1)) }
-                                                moveBy(dragStartVisualOffset - dragPosition - visualOffset())
+                                                moveBy(dragStartVisualOffset - dragPosition - visualOffset(), stretch = true)
                                             }
+                                            releaseJelly()
                                             val velocity = if (canceled) 0f else releaseVelocity
                                             // A relaxed thumb swipe should commit even if the finger
                                             // slows before lifting. Cap the distance on the unfolded
@@ -206,6 +222,7 @@ internal fun Modifier.onePageGestures(
                                         }
                                         trace?.motionCompleted(position(), visualOffset())
                                     } catch (failure: CancellationException) {
+                                        releaseJelly()
                                         trace?.motionCanceled(position(), visualOffset())
                                         throw failure
                                     }

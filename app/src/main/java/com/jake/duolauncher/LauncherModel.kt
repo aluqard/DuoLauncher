@@ -35,8 +35,23 @@ data class AppEntry(
     val profileLabel: String = "Personal",
     val isWork: Boolean = false,
     val available: Boolean = true,
+    /** The label Android reports; [label] may be a user rename from schema-9 app overrides. */
+    val originalLabel: String = label,
+    /** Set for a pinned shortcut on Home; such entries never appear in All apps. */
+    val shortcutId: String? = null,
+    /** Library category key derived from the app's declared Android category. */
+    val category: String = "other",
+    /** First install time (ms), used for the Recently added group; 0 when unknown. */
+    val installedAt: Long = 0L,
 ) {
     val packageName: String get() = component.packageName
+}
+
+/** Applies user renames and keeps the catalog in label order. */
+internal fun applyLabelOverrides(entries: List<AppEntry>, overrides: Map<String, AppOverride>): List<AppEntry> {
+    val collator = Collator.getInstance()
+    return entries.map { entry -> entry.copy(label = overrides[entry.id]?.label?.takeIf(String::isNotBlank) ?: entry.originalLabel) }
+        .sortedWith { a, b -> collator.compare(a.label, b.label) }
 }
 
 data class LauncherState(
@@ -55,6 +70,9 @@ data class LauncherState(
     val expanded: LayoutPreset = LayoutPreset(),
     val labels: Boolean = true,
     val verticalStatus: Boolean = true,
+    val extras: LauncherExtras = LauncherExtras(),
+    /** Pinned shortcuts placed on Home, read from Android (not persisted). */
+    val shortcuts: List<AppEntry> = emptyList(),
     val loading: Boolean = true,
     val error: String? = null,
 ) {
@@ -66,9 +84,9 @@ data class LauncherState(
 
 class LauncherModel(application: Application) : AndroidViewModel(application) {
     private data class RefreshedApps(val entries: List<AppEntry>, val profiles: List<AppProfile>,
-        val authoritativeProfiles: Set<Long>, val removedProfiles: Set<Long>)
+        val authoritativeProfiles: Set<Long>, val removedProfiles: Set<Long>, val shortcuts: List<AppEntry>?)
     private data class UndoImportSettings(val compact: LayoutPreset, val expanded: LayoutPreset, val labels: Boolean,
-        val googleSearch: Boolean, val verticalStatus: Boolean)
+        val googleSearch: Boolean, val verticalStatus: Boolean, val extras: LauncherExtras)
     private val prefs = application.getSharedPreferences("launcher", 0)
     private val launcherApps = application.getSystemService(LauncherApps::class.java)
     private val userManager = application.getSystemService(UserManager::class.java)
@@ -115,6 +133,13 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
 
     init { launcherApps.registerCallback(callback); refresh() }
 
+    /** Redraws every icon from the apps' current artwork (after a system theme or icon pack change). */
+    fun refreshIcons() {
+        iconConfiguration = ""
+        IconPacks.clear()
+        refresh()
+    }
+
     fun refresh(invalidatedPackage: String? = null, user: UserHandle = Process.myUserHandle()) {
         invalidatedPackage?.let { invalidatedPackages += userManager.getSerialNumberForUser(user) to it }
         if (refreshing) { refreshPending = true; return }
@@ -125,7 +150,10 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         invalidatedPackages.clear()
         removedPackages.clear()
         val resources = getApplication<Application>().resources
-        val configuration = resources.configuration.let { "${it.densityDpi}|${it.locales.toLanguageTags()}|${it.uiMode}" }
+        val theme = ThemeStore.load(getApplication()).value
+        val iconOverrides = mutable.value.extras.appOverrides.mapValues { it.value.icon }.filterValues { it != null }
+        val configuration = resources.configuration.let { "${it.densityDpi}|${it.locales.toLanguageTags()}|${it.uiMode}" } +
+            "|${theme.iconKey(DuoAppearanceRuntime.dark)}|${iconOverrides.hashCode()}"
         viewModelScope.launch {
             try {
                 val apps = withContext(Dispatchers.IO) {
@@ -170,8 +198,9 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                             val label = info.label.toString()
                             iconCache[id]?.takeIf { it.label == label && it.available } ?: run {
                                 val icon = runCatching { info.getBadgedIcon(0) }.getOrElse { application.packageManager.defaultActivityIcon }
-                                AppEntry(id, label, launcherIcon(icon), component, profile, serial, descriptor.label,
-                                    descriptor.isWork, available = true).also { iconCache[id] = it }
+                                AppEntry(id, label, themedIcon(icon, component, id, theme), component, profile, serial, descriptor.label,
+                                    descriptor.isWork, available = true, category = categoryKey(info.applicationInfo.category, component.packageName),
+                                    installedAt = runCatching { info.firstInstallTime }.getOrDefault(0L)).also { iconCache[id] = it }
                             }
                         }
                     }
@@ -192,28 +221,37 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                     iconCache.keys.retainAll(entries.map { it.id }.toSet())
                     RefreshedApps(entries, (profiles + unavailable.map { AppProfile(it.userSerial, it.profileLabel, false, true,
                         quiet = true, unlocked = false, available = false) }).distinctBy(AppProfile::userSerial),
-                        authoritativeProfiles.toSet(), removedProfileSerials)
+                        authoritativeProfiles.toSet(), removedProfileSerials, pinnedShortcuts(handles, profiles))
                 }
                 mutable.update { old ->
                     val entries = apps.entries
                     val profiles = apps.profiles
-                    val dock = if (!prefs.getBoolean("initialized", false)) initialDock(entries) else old.dock
+                    val firstRun = !prefs.getBoolean("initialized", false)
+                    val dock = if (firstRun) initialDock(entries) else old.dock
+                    val compactPreset = if (firstRun && !hasHingeSensor()) old.compact.copy(dockSide = DockSide.BOTTOM) else old.compact
                     val installed = entries.map { it.id }
                     val legacyPins = if (needsMigration) migrateHomePins(old.order, installed, suggestedPins(entries, dock))
                         else old.homeSlots
                     val pins = if (sourceSchema < 6 && needsMigration) migrateSchema5Apps(legacyPins) else legacyPins
                     val availableIds = entries.mapTo(mutableSetOf(), AppEntry::id)
                     val authoritative = apps.authoritativeProfiles
-                    val removedIds = removedAppIds(old.homeSlots.filterNotNull() + old.leadingSlots.filterNotNull() +
-                        old.dock.filterNotNull() + old.folders.flatMap { it.appIds }, availableIds,
+                    val placedIds = old.homeSlots.filterNotNull() + old.leadingSlots.filterNotNull() +
+                        old.dock.filterNotNull() + old.folders.flatMap { it.appIds }
+                    val removedIds = removedAppIds(placedIds, availableIds,
                         authoritative, temporarilyUnavailable, removed, userManager.getSerialNumberForUser(Process.myUserHandle()),
-                        apps.removedProfiles)
+                        apps.removedProfiles) + removedShortcutIds(placedIds, removed, apps.shortcuts?.mapTo(mutableSetOf()) { it.id })
                     val validPins = pins.map { it?.takeUnless(removedIds::contains) }
                     val validDock = dock.map { it?.takeUnless(removedIds::contains) }
                     val reconciled = reconcileFolders(HomeLayout(validPins, validDock, old.widgetPlacements, old.folders,
                         old.widgetRestores, old.leadingSlots), removedIds)
-                    old.copy(apps = entries, profiles = profiles, homeSlots = reconciled.slots, leadingSlots = reconciled.leadingSlots,
+                    val knownIds = entries.mapTo(mutableSetOf(), AppEntry::id) +
+                        old.extras.appOverrides.keys.filter(::isShortcutId)
+                    old.copy(apps = applyLabelOverrides(entries, old.extras.appOverrides), profiles = profiles, compact = compactPreset, homeSlots = reconciled.slots, leadingSlots = reconciled.leadingSlots,
                         dock = reconciled.dock, folders = reconciled.folders,
+                        extras = old.extras.pruned(knownIds, old.widgetPlacements.mapTo(mutableSetOf()) { it.slot },
+                            HomeLayout(reconciled.slots, reconciled.dock, old.widgetPlacements, reconciled.folders,
+                                old.widgetRestores, reconciled.leadingSlots).pageCount),
+                        shortcuts = apps.shortcuts ?: old.shortcuts,
                         canUndoEdit = old.canUndoEdit && old.layout == reconciled, loading = false,
                         error = if (statePayloadInvalid) old.error else null)
                 }
@@ -245,15 +283,17 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             val isWork = item.optBoolean("work", identity.userSerial != null)
             val baseIcon = application.packageManager.defaultActivityIcon
             val icon = runCatching { application.packageManager.getUserBadgedIcon(baseIcon, user) }.getOrDefault(baseIcon)
-            AppEntry(id, item.getString("label"), launcherIcon(icon), component, user, serial,
-                item.optString("profile", if (isWork) "Work" else "Personal"), isWork, available = false)
+            AppEntry(id, item.getString("label"), themedIcon(icon, null, id, ThemeStore.state.value), component, user, serial,
+                item.optString("profile", if (isWork) "Work" else "Personal"), isWork, available = false,
+                category = normalizeCategoryKey(item.optString("category", "other")), installedAt = item.optLong("installedAt", 0L))
         }
     }.getOrDefault(emptyList())
 
     private fun saveCachedApps(apps: List<AppEntry>) {
         val array = JSONArray().also { result -> apps.forEach { app -> result.put(JSONObject()
             .put("id", app.id).put("label", app.label).put("serial", app.userSerial)
-            .put("profile", app.profileLabel).put("work", app.isWork)) } }
+            .put("profile", app.profileLabel).put("work", app.isWork).put("category", app.category)
+            .put("installedAt", app.installedAt)) } }
         appCatalogPrefs.edit().putString("apps", array.toString()).apply()
     }
 
@@ -362,14 +402,15 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         if (statePayloadInvalid) return false
         val old = mutable.value
         if (old.layout == preview.layout && old.compact == preview.compact && old.expanded == preview.expanded &&
-            old.labels == preview.labels && old.googleSearch == preview.googleSearch && old.verticalStatus == preview.verticalStatus) return false
+            old.labels == preview.labels && old.googleSearch == preview.googleSearch && old.verticalStatus == preview.verticalStatus &&
+            old.extras == preview.extras) return false
         undoLayout = old.layout to preview.layout
-        undoImportSettings = UndoImportSettings(old.compact, old.expanded, old.labels, old.googleSearch, old.verticalStatus)
+        undoImportSettings = UndoImportSettings(old.compact, old.expanded, old.labels, old.googleSearch, old.verticalStatus, old.extras)
         mutable.value = old.copy(homeSlots = preview.layout.slots, leadingSlots = preview.layout.leadingSlots, dock = preview.layout.dock,
             widgetPlacements = preview.layout.widgetPlacements, folders = preview.layout.folders,
             widgetRestores = preview.layout.widgetRestores, compact = preview.compact, expanded = preview.expanded,
             labels = preview.labels, googleSearch = preview.googleSearch, verticalStatus = preview.verticalStatus,
-            editRevision = old.editRevision + 1, canUndoEdit = true)
+            extras = preview.extras, editRevision = old.editRevision + 1, canUndoEdit = true)
         persist()
         return true
     }
@@ -390,6 +431,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         if (old.layout == next) return false
         undoLayout = old.layout to next
         undoImportSettings = null
+        undoMainPage = null
         mutable.value = old.copy(homeSlots = next.slots, leadingSlots = next.leadingSlots, dock = next.dock,
             widgetPlacements = next.widgetPlacements, folders = next.folders,
             widgetRestores = next.widgetRestores,
@@ -402,7 +444,8 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val (before, after) = undoLayout ?: return false
         val old = mutable.value
         if (!old.canUndoEdit || old.layout != after) return false
-        val installed = (old.apps.map { it.id } + before.folders.map { it.id }).toSet()
+        val installed = (old.apps.map { it.id } + before.folders.map { it.id } +
+            (before.slots + before.leadingSlots + before.dock).filterNotNull().filter(::isShortcutId)).toSet()
         val settings = undoImportSettings
         mutable.value = old.copy(homeSlots = reconcileHomeSlots(before.slots, installed),
             leadingSlots = before.leadingSlots.map { it?.takeIf(installed::contains) },
@@ -410,12 +453,115 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             widgetRestores = before.widgetRestores, compact = settings?.compact ?: old.compact,
             expanded = settings?.expanded ?: old.expanded, labels = settings?.labels ?: old.labels,
             googleSearch = settings?.googleSearch ?: old.googleSearch, verticalStatus = settings?.verticalStatus ?: old.verticalStatus,
-            canUndoEdit = false,
+            extras = settings?.extras ?: undoMainPage?.let { old.extras.copy(mainPage = it) } ?: old.extras, canUndoEdit = false,
             editRevision = old.editRevision + 1)
         undoLayout = null
         undoImportSettings = null
+        undoMainPage = null
         persist()
         return true
+    }
+
+    /** The main page before a page reorder, so Undo restores it with the pages. */
+    private var undoMainPage: Int? = null
+
+    /** Applies a change to schema-9 state (hidden apps, overrides, categories, main page, widget content). */
+    fun updateExtras(transform: (LauncherExtras) -> LauncherExtras) {
+        if (statePayloadInvalid) return
+        mutable.update { old ->
+            val extras = transform(old.extras)
+            old.copy(extras = extras, apps = if (extras.appOverrides == old.extras.appOverrides) old.apps
+                else applyLabelOverrides(old.apps, extras.appOverrides))
+        }
+        persist()
+    }
+
+    fun selectionRemove(ids: List<String>) = commitLayout(bulkRemove(mutable.value.layout, ids))
+    fun selectionMove(ids: List<String>, page: Int): Int {
+        val (next, moved) = bulkMoveToPage(mutable.value.layout, ids, page)
+        commitLayout(next)
+        return moved
+    }
+    fun selectionFolder(ids: List<String>) = commitLayout(bulkFolder(mutable.value.layout, ids, FolderEntry(newFolderId(), "Folder", emptyList())))
+
+    /** Applies a page order (old page numbers; omitted pages are deleted) and the main page as one undoable edit. */
+    fun reorderPages(order: List<Int>, mainPage: Int) {
+        if (statePayloadInvalid || order.isEmpty()) return
+        val layout = mutable.value.layout
+        val previousMain = mutable.value.extras.mainPage
+        if (order != (0 until layout.pageCount).toList() && commitLayout(remapPages(layout, order))) undoMainPage = previousMain
+        updateExtras { it.copy(mainPage = order.indexOf(mainPage).coerceAtLeast(0)) }
+    }
+
+    /** Hiding also takes the app off Home, the dock and folders; unhiding only returns it to All apps. */
+    fun setHidden(id: String, hidden: Boolean) {
+        if (statePayloadInvalid) return
+        if (hidden) commitLayout(removeAppEverywhere(mutable.value.layout, id))
+        updateExtras { it.copy(hiddenApps = if (hidden) it.hiddenApps + id else it.hiddenApps - id) }
+    }
+
+    /** Foldables report a hinge-angle sensor; ordinary phones do not. */
+    private fun hasHingeSensor(): Boolean = runCatching {
+        getApplication<Application>().getSystemService(android.hardware.SensorManager::class.java)
+            ?.getDefaultSensor(android.hardware.Sensor.TYPE_HINGE_ANGLE) != null
+    }.getOrDefault(false)
+
+    /** Puts an item (such as an accepted pinned shortcut) in the first free Home cell. */
+    fun placeOnHome(id: String) {
+        if (statePayloadInvalid) return
+        mutable.update { old ->
+            val blocked = old.widgetPlacements.flatMapTo(mutableSetOf()) { it.coveredIndices() }.filterTo(mutableSetOf()) { it >= 0 }
+            old.copy(homeSlots = pinHomeApp(old.homeSlots, id, true, blocked), canUndoEdit = false, editRevision = old.editRevision + 1)
+        }
+        persist()
+        refresh()
+    }
+
+    /**
+     * Reads shortcuts this launcher has pinned. Returns null when Android does not allow it (not the
+     * default Home app) or a profile cannot be read, so callers never treat that as "unpinned".
+     * Pinned shortcuts no longer on Home are released.
+     */
+    private fun pinnedShortcuts(handles: List<UserHandle>, profiles: List<AppProfile>): List<AppEntry>? = runCatching {
+        if (!launcherApps.hasShortcutHostPermission()) return null
+        val application = getApplication<Application>()
+        val density = application.resources.displayMetrics.densityDpi
+        val placed = mutable.value.let { (it.homeSlots + it.leadingSlots + it.dock).filterNotNull().toSet() }
+        handles.flatMap { profile ->
+            val serial = userManager.getSerialNumberForUser(profile)
+            val descriptor = profiles.first { it.userSerial == serial }
+            if (!descriptor.available) return null
+            val query = LauncherApps.ShortcutQuery().setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+            val infos = launcherApps.getShortcuts(query, profile).orEmpty()
+            val (kept, released) = infos.partition { shortcutSlotId(ShortcutKey(it.`package`, it.id, serial)) in placed }
+            released.groupBy { it.`package` }.forEach { (pkg, _) ->
+                runCatching { launcherApps.pinShortcuts(pkg, kept.filter { it.`package` == pkg }.map { it.id }, profile) }
+            }
+            kept.map { info ->
+                val drawable = runCatching { launcherApps.getShortcutBadgedIconDrawable(info, density) }.getOrNull()
+                    ?: application.packageManager.defaultActivityIcon
+                AppEntry(shortcutSlotId(ShortcutKey(info.`package`, info.id, serial)),
+                    (info.shortLabel ?: info.longLabel ?: info.`package`).toString(), themedIcon(drawable, null, null, ThemeStore.state.value),
+                    info.activity ?: ComponentName(info.`package`, ""), profile, serial, descriptor.label, descriptor.isWork,
+                    shortcutId = info.id)
+            }
+        }
+    }.getOrNull()
+
+    /** Saves a rename and icon choice together; icon changes re-render the catalog. */
+    fun setAppOverride(id: String, label: String?, icon: String?) {
+        val before = mutable.value.extras.appOverrides[id]?.icon
+        updateExtras { extras ->
+            val next = AppOverride(label?.trim()?.take(60)?.takeIf(String::isNotEmpty), icon?.takeIf(String::isNotBlank))
+            extras.copy(appOverrides = if (next.isEmpty) extras.appOverrides - id else extras.appOverrides + (id to next))
+        }
+        if (before != icon) refresh()
+    }
+
+    fun setAppLabel(id: String, label: String?) = updateExtras { extras ->
+        val current = extras.appOverrides[id] ?: AppOverride()
+        val next = current.copy(label = label?.trim()?.take(60)?.takeIf(String::isNotEmpty))
+        extras.copy(appOverrides = if (next.isEmpty) extras.appOverrides - id else extras.appOverrides + (id to next))
     }
     fun setLabels(value: Boolean) { if (statePayloadInvalid) return; undoLayout = null; undoImportSettings = null; mutable.update { it.copy(labels = value, canUndoEdit = false) }; persist() }
     fun setVerticalStatus(value: Boolean) { if (statePayloadInvalid) return; undoLayout = null; undoImportSettings = null; mutable.update { it.copy(verticalStatus = value, canUndoEdit = false) }; persist() }
@@ -448,7 +594,8 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
 
     internal fun restoreLayout(layout: HomeLayout) {
         if (statePayloadInvalid) return
-        val installed = (mutable.value.apps.map { it.id } + layout.folders.map { it.id }).toSet()
+        val installed = (mutable.value.apps.map { it.id } + layout.folders.map { it.id } +
+            (layout.slots + layout.leadingSlots + layout.dock).filterNotNull().filter(::isShortcutId)).toSet()
         mutable.update { it.copy(homeSlots = reconcileHomeSlots(layout.slots, installed),
             leadingSlots = layout.slotsForPage(-1).map { id -> id?.takeIf { it in installed || isFolderId(it) } },
             dock = layout.dock.map { id -> id?.takeIf { it in installed || isFolderId(it) } }, widgetPlacements = layout.widgetPlacements,
@@ -464,6 +611,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val s = mutable.value
         fun preset(p: LayoutPreset) = JSONObject().put("iconSize", p.iconSize).put("rowGap", p.rowGap)
             .put("dockWidth", p.dockWidth).put("dockPosition", p.dockPosition).put("dockAlignToGrid", p.dockAlignToGrid)
+            .put("dockSide", p.dockSide.name).put("topMargin", p.topMargin)
         val widgets = JSONArray().also { array -> s.widgetPlacements.forEach { w -> array.put(JSONObject()
             .put("slot", w.slot).put("id", w.id).put("page", w.page).put("column", w.column).put("row", w.row)
             .put("spanX", w.spanX).put("spanY", w.spanY)) } }
@@ -473,7 +621,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             .put("slot", restore.slot).put("provider", restore.providerComponent).put("userSerial", restore.userSerial)
             .put("title", restore.title).put("profileLabel", restore.profileLabel).put("work", restore.isWork)
             .put("sourceScope", restore.sourceScope)) } }
-        val data = JSONObject().put("schema", 8).put("pinned", JSONArray(s.order)).put("homeSlots", JSONArray(s.homeSlots))
+        val data = JSONObject().put("schema", 9).put("pinned", JSONArray(s.order)).put("homeSlots", JSONArray(s.homeSlots))
             .put("leadingSlots", JSONArray(s.leadingSlots)).put("dock", JSONArray(s.dock))
             .put("widgets", widgets).put("labels", s.labels)
             .put("folders", folders)
@@ -481,6 +629,8 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             .put("googleSearch", s.googleSearch)
             .put("verticalStatus", s.verticalStatus)
             .put("compact", preset(s.compact)).put("expanded", preset(s.expanded))
+        val liveWidgetSlots = s.widgetPlacements.mapTo(mutableSetOf()) { it.slot }
+        encodeLauncherExtras(s.extras.copy(widgetContent = s.extras.widgetContent.filterKeys { it in liveWidgetSlots }), data)
         val editor = prefs.edit()
         if (legacyRaw != null && sourceSchema == 2 && !prefs.contains("state_v2_backup"))
             editor.putString("state_v2_backup", legacyRaw)
@@ -494,6 +644,8 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             editor.putString("state_v6_backup", legacyRaw)
         if (legacyRaw != null && sourceSchema < 8 && !prefs.contains("state_v7_backup"))
             editor.putString("state_v7_backup", legacyRaw)
+        if (legacyRaw != null && sourceSchema < 9 && !prefs.contains("state_v8_backup"))
+            editor.putString("state_v8_backup", legacyRaw)
         editor.putString("state", data.toString()).putBoolean("initialized", true).apply()
     }
 
@@ -505,13 +657,14 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                 p.optDouble("rowGap", default.rowGap.toDouble()).toFloat(),
                 p.optDouble("dockWidth", default.dockWidth.toDouble()).toFloat(),
                 p.optDouble("dockPosition", default.dockPosition.toDouble()).toFloat(),
-                p.optBoolean("dockAlignToGrid", true)).sanitized()
+                p.optBoolean("dockAlignToGrid", true), dockSideFrom(p.optString("dockSide").takeIf { it.isNotBlank() }),
+                p.optDouble("topMargin", AUTO_TOP_MARGIN.toDouble()).toFloat()).sanitized()
             return upgradePreset(loaded, j.optInt("schema", 1), key == "expanded")
         }
         val order = j.optJSONArray(if (j.optInt("schema", 1) >= 2) "pinned" else "order") ?: JSONArray()
         val cells = j.optJSONArray("homeSlots").takeIf { j.optInt("schema", 1) >= 4 } ?: order
         val schema = j.optInt("schema", 1)
-        require(schema <= 8) { "Unsupported saved-state schema $schema" }
+        require(schema <= 9) { "Unsupported saved-state schema $schema" }
         val rawSlots = List(cells.length()) { cells.optString(it).takeIf { id -> id.isNotBlank() && id != "null" } }
         val legacySlots = normalizeHomeSlots(rawSlots)
         val rawLeadingSlots = if (schema >= 8) {
@@ -617,7 +770,8 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             widgetPlacements = placements, folders = folders, widgetRestores = restores,
             googleSearch = j.optBoolean("googleSearch", true),
             labels = j.optBoolean("labels", true), compact = preset("compact", LayoutPreset()),
-            expanded = preset("expanded", LayoutPreset()), verticalStatus = j.optBoolean("verticalStatus", true))
+            expanded = preset("expanded", LayoutPreset()), verticalStatus = j.optBoolean("verticalStatus", true),
+            extras = if (schema >= 9) decodeLauncherExtras(j) else LauncherExtras())
     }.getOrElse {
         statePayloadInvalid = legacyRaw != null
         LauncherState(loading = false, error = "Saved Home layout could not be read; it was left unchanged.")
@@ -626,14 +780,22 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() { launcherApps.unregisterCallback(callback) }
 }
 
-/** Render adaptive layers through our rounded-square mask, preserving original app artwork. */
-private fun launcherIcon(drawable: Drawable): Bitmap {
-    if (drawable !is AdaptiveIconDrawable) return drawable.toBitmap(144, 144)
-    val bitmap = Bitmap.createBitmap(144, 144, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    canvas.clipPath(Path().apply { addRoundRect(0f, 0f, 144f, 144f, 34f, 34f, Path.Direction.CW) })
-    drawable.setBounds(0, 0, 144, 144)
-    drawable.background?.draw(canvas)
-    drawable.foreground?.draw(canvas)
-    return bitmap
+/**
+ * Applies the icon theme: a user-chosen icon for this app, else the selected icon pack (its icon, or its
+ * back/mask decoration), else the app's own artwork drawn in the chosen outline and tone.
+ */
+private fun LauncherModel.themedIcon(drawable: Drawable, component: ComponentName?, appId: String?, theme: ThemeSettings): Bitmap {
+    val context = getApplication<Application>()
+    val override = appId?.let { state.value.extras.appOverrides[it]?.icon }
+    val dark = DuoAppearanceRuntime.dark
+    if (override != null && override.startsWith("pack:")) {
+        val (pkg, name) = override.removePrefix("pack:").split('/', limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+        IconPacks.load(context, pkg)?.drawableNamed(name)?.let { return IconRenderer.renderPacked(it, theme) }
+    }
+    val pack = if (override == "original") null else IconPacks.load(context, theme.iconPack)
+    if (pack != null && component != null) {
+        pack.iconFor(component)?.let { return IconRenderer.renderPacked(it, theme) }
+        pack.decorate(IconRenderer.render(drawable, theme.copy(iconStyle = IconStyle.ORIGINAL), dark))?.let { return it }
+    }
+    return IconRenderer.render(drawable, theme, dark)
 }
