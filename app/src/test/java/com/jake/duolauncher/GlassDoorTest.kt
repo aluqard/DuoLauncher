@@ -13,8 +13,9 @@ class GlassDoorTest {
         assertEquals(1f, glassDoorAmount(GLASS_DOOR_FULL), 0f)
         assertEquals(0f, glassDoorAmount(GLASS_DOOR_FLAT), 0f)
         assertEquals(0f, glassDoorAmount(180f), 0f)
-        // Halfway between full and flat sits at half frost, and the curve only ever falls while opening.
-        assertEquals(.5f, glassDoorAmount((GLASS_DOOR_FULL + GLASS_DOOR_FLAT) / 2f), .001f)
+        // The frost shows as soon as the phone leaves flat: already past half by halfway, and clearly at 160°.
+        assertTrue(glassDoorAmount((GLASS_DOOR_FULL + GLASS_DOOR_FLAT) / 2f) > .7f)
+        assertTrue(glassDoorAmount(160f) > .3f)
         var previous = 1f
         for (angle in 90..180) {
             val amount = glassDoorAmount(angle.toFloat())
@@ -46,5 +47,20 @@ class GlassDoorTest {
         assertEquals(32f, handoverAngle(34f, 30f)!!, 0f)
         assertEquals(null, handoverAngle(2f, 4f))
         assertEquals(null, handoverAngle(176f, 170f))
+    }
+
+    @Test fun `a stops-only hinge keeps the frost through a close`() {
+        // Between its 90 and 0 stops it says nothing, so the frost must outlast an ordinary close.
+        assertTrue(glassDoorHoldMillis(coarse = true) >= 2500L)
+        assertEquals(900L, glassDoorHoldMillis(coarse = false))
+    }
+
+    @Test fun `a stops-only hinge starts the frost when the fold state leaves flat`() {
+        assertEquals(GLASS_DOOR_LEAVING_FLAT, glassDoorReading(180f, coarse = true, halfOpen = true)!!, 0f)
+        assertEquals(GLASS_DOOR_LEAVING_FLAT, glassDoorReading(null, coarse = true, halfOpen = true)!!, 0f)
+        // Once the hinge itself reports, its reading wins; a fine hinge never needs the stand-in.
+        assertEquals(90f, glassDoorReading(90f, coarse = true, halfOpen = true)!!, 0f)
+        assertEquals(180f, glassDoorReading(180f, coarse = true, halfOpen = false)!!, 0f)
+        assertEquals(176f, glassDoorReading(176f, coarse = false, halfOpen = true)!!, 0f)
     }
 }

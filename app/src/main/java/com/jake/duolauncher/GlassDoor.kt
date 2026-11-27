@@ -12,12 +12,15 @@ import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -48,15 +51,28 @@ import kotlin.math.abs
 /** Hinge angle treated as fully open: real hinges rest a few degrees short of 180°. */
 internal const val GLASS_DOOR_FLAT = 172f
 
-/** At or below this hinge angle Home is fully frosted (the inner screen lights somewhere below it). */
-internal const val GLASS_DOOR_FULL = 90f
+/** At or below this hinge angle Home is fully frosted. */
+internal const val GLASS_DOOR_FULL = 110f
 
-/** How frosted Home is at [hinge] degrees: 1 at [GLASS_DOOR_FULL] or less, easing to 0 at [GLASS_DOOR_FLAT]. */
+/**
+ * How frosted Home is at [hinge] degrees: 0 at [GLASS_DOOR_FLAT], 1 at [GLASS_DOOR_FULL] or less. The curve
+ * rises fastest just off flat, so the frost shows as soon as the phone starts to fold.
+ */
 internal fun glassDoorAmount(hinge: Float?): Float {
     if (hinge == null || hinge.isNaN()) return 0f
     val t = ((GLASS_DOOR_FLAT - hinge) / (GLASS_DOOR_FLAT - GLASS_DOOR_FULL)).coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
+    return 1f - (1f - t) * (1f - t)
 }
+
+/** Stands in for a stops-only hinge that still reads flat while the fold state already says half-open. */
+internal const val GLASS_DOOR_LEAVING_FLAT = 140f
+
+/**
+ * The hinge angle to follow. A stops-only hinge keeps reading 180° until it passes its mid stop, but the
+ * fold state turns half-open as soon as the phone leaves flat, so that starts the frost without waiting.
+ */
+internal fun glassDoorReading(angle: Float?, coarse: Boolean, halfOpen: Boolean): Float? =
+    if (coarse && halfOpen && (angle == null || angle >= GLASS_DOOR_FLAT - 2f)) GLASS_DOOR_LEAVING_FLAT else angle
 
 /** A shut hinge idles a few degrees above 0°; below this the cover screen counts as closed. */
 internal const val GLASS_DOOR_CLOSED = 8f
@@ -88,6 +104,10 @@ internal object GlassDoorSwap {
     private const val KEY = "swapAngle"
     private var lastInner: Pair<Float, Long>? = null
     private var lastCover: Pair<Float, Long>? = null
+    private var innerSeenAt = Long.MIN_VALUE
+
+    /** Whether the inner screen read the hinge within [millis]: the cover just lit because the phone closed. */
+    fun innerWithin(now: Long, millis: Long): Boolean = innerSeenAt != Long.MIN_VALUE && now - innerSeenAt in 0..millis
 
     fun angle(context: android.content.Context): Float =
         context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getFloat(KEY, GLASS_DOOR_SWAP_DEFAULT)
@@ -100,7 +120,7 @@ internal object GlassDoorSwap {
             }
             if (inner) lastCover = null else lastInner = null
         }
-        if (inner) lastInner = angle to at else lastCover = angle to at
+        if (inner) { lastInner = angle to at; innerSeenAt = at } else lastCover = angle to at
     }
 }
 
@@ -110,6 +130,12 @@ internal fun hasHingeSensor(context: android.content.Context): Boolean =
 
 /** A hinge that reports only a few stops (a Galaxy Z Fold reads 0°, 90° and 180°) is eased in time instead. */
 internal fun coarseHinge(resolutionDegrees: Float): Boolean = resolutionDegrees >= 30f
+
+/**
+ * How long the frost stays after the last hinge movement before the phone counts as held still. A stops-only
+ * hinge says nothing between its stops (a close goes 90° … then 0° once shut), so it is given longer.
+ */
+internal fun glassDoorHoldMillis(coarse: Boolean): Long = if (coarse) 3000L else 900L
 
 /** Where the crease runs in the window: [splitsY] means a horizontal crease, [at] is its position in px. */
 internal data class GlassDoorLine(val at: Float, val splitsY: Boolean)
@@ -147,7 +173,8 @@ internal fun rememberGlassDoor(enabled: Boolean, strength: Float, side: GlassDoo
     val activity = context as? Activity
     val fold = remember { mutableStateOf<FoldingFeature?>(null) }
     val cover = remember { mutableStateOf(false) }
-    var hasFold by remember { mutableStateOf(false) }
+    // Null until the window reports its layout: until then it is not known which screen Home is on.
+    var hasFold by remember { mutableStateOf<Boolean?>(null) }
     if (activity != null) LaunchedEffect(activity) {
         WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity).collect { info ->
             val feature = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
@@ -158,7 +185,8 @@ internal fun rememberGlassDoor(enabled: Boolean, strength: Float, side: GlassDoo
     val hinge = remember { sensors?.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE) }
     val coarse = hinge != null && coarseHinge(hinge.resolution)
     var angle by remember { mutableStateOf<Float?>(null) }
-    val active = enabled && hinge != null
+    val active = enabled && hinge != null && hasFold != null
+    val inner = hasFold == true
     LifecycleResumeEffect(active) {
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) { angle = event.values[0] }
@@ -170,18 +198,33 @@ internal fun rememberGlassDoor(enabled: Boolean, strength: Float, side: GlassDoo
     // Only real hinge movement keeps the frost up; sensor jitter of a degree or so does not.
     var anchor by remember { mutableStateOf<Float?>(null) }
     var lastMove by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(angle) {
-        val now = angle ?: run { anchor = null; return@LaunchedEffect }
-        GlassDoorSwap.observe(context, now, inner = hasFold, at = SystemClock.uptimeMillis())
+    val halfOpen = fold.value?.state == FoldingFeature.State.HALF_OPENED
+    val reading = glassDoorReading(angle, coarse, halfOpen)
+    LaunchedEffect(reading) {
+        val now = reading ?: run { anchor = null; return@LaunchedEffect }
+        if (hasFold != null) GlassDoorSwap.observe(context, now, inner = inner, at = SystemClock.uptimeMillis())
         if (anchor.let { it == null || abs(now - it) >= 2f }) { anchor = now; lastMove = SystemClock.uptimeMillis() }
     }
     val target = remember { mutableFloatStateOf(0f) }
     LaunchedEffect(lastMove, anchor, hasFold) {
-        target.floatValue = if (hasFold) glassDoorAmount(anchor) else coverDoorAmount(anchor, GlassDoorSwap.angle(context))
-        if (target.floatValue > 0f) { delay(900); target.floatValue = 0f }
+        if (hasFold == null) return@LaunchedEffect
+        target.floatValue = if (inner) glassDoorAmount(anchor) else coverDoorAmount(anchor, GlassDoorSwap.angle(context))
+        if (target.floatValue > 0f) { delay(glassDoorHoldMillis(coarse)); target.floatValue = 0f }
     }
-    val shown = animateFloatAsState(if (active) target.floatValue else 0f,
+    // Closing onto the cover screen: it lights where the inner screen handed over, so it starts fully frosted
+    // and clears as the phone shuts, even when the hinge has nothing to say until it is shut.
+    val coverIntro = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(hasFold) {
+        if (hasFold == false && GlassDoorSwap.innerWithin(SystemClock.uptimeMillis(), 2500L)) {
+            coverIntro.floatValue = 1f; withFrameNanos { }; withFrameNanos { }; coverIntro.floatValue = 0f
+        }
+    }
+    val introShown by animateFloatAsState(coverIntro.floatValue,
+        if (coverIntro.floatValue > 0f) snap() else tween(650, easing = FastOutSlowInEasing), label = "cover intro")
+    val followed by animateFloatAsState(if (active) target.floatValue else 0f,
         if (coarse) tween(520, easing = FastOutSlowInEasing) else spring(stiffness = 900f), label = "glass door")
+    // Both parts settle to 0 when the effect is off, and nothing is applied then anyway.
+    val shown = remember { derivedStateOf { maxOf(followed, introShown) } }
     if (!active) return null
     return remember(strength, side) { GlassDoorState(shown, fold, cover, side, strength) }
 }
