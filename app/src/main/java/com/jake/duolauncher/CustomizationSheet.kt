@@ -78,6 +78,8 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
                         "Icons, spacing, dock, and widgets", "customization-home") { onPage(CustomizationPage.HOME) }
                     CustomizationDestination(Icons.Rounded.Nightlight, "Stand mode",
                         "Clock and calendar when the phone stands", "customization-stand") { onPage(CustomizationPage.STAND) }
+                    StandTriggerSettingRow()
+                    GlassDoorSettingRow()
                     CustomizationDestination(Icons.Rounded.Search, "Gestures & search",
                         "Labels, status, and search behavior", "customization-gestures") { onPage(CustomizationPage.GESTURES) }
                     CustomizationDestination(Icons.Rounded.Save, "Backup",
@@ -269,6 +271,33 @@ private fun HelpSection(icon: ImageVector, title: String, detail: String) {
         Slider(value, onChange, valueRange = range, modifier = Modifier.semantics { contentDescription = label }) }
 }
 
+/** When Stand mode turns on, on the main Settings page of phones with a hinge (the full options are on its page). */
+@Composable private fun StandTriggerSettingRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    if (!remember { hasHingeSensor(context) }) return
+    val settings by StandStore.load(context).collectAsState()
+    Text("Stand mode turns on", style = MaterialTheme.typography.titleSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StandTrigger.entries.forEach { trigger ->
+            FilterChip(settings.trigger == trigger, { StandStore.update(context) { it.copy(trigger = trigger) } },
+                label = { Text(trigger.label) }, modifier = Modifier.testTag("stand-trigger-quick-${trigger.name}"))
+        }
+    }
+    Text("Only while charging keeps a half-open phone in your hand on Home; Always also opens it when you just hold it half-folded.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** Glass door on/off, on the main Settings page of phones with a hinge (strength is in Wallpaper & appearance). */
+@Composable private fun GlassDoorSettingRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    if (!remember { hasHingeSensor(context) }) return
+    val settings by WallpaperStore.load(context).collectAsState()
+    SettingsSwitch("Glass door when unfolding", settings.glassDoor,
+        { on -> WallpaperStore.update(context) { it.copy(glassDoor = on) } }, "glass-door-settings-switch")
+    Text("Home frosts like two panes of glass hinged at the crease as the phone opens, and clears when it lies flat. Frost strength is in Wallpaper & appearance.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 @Composable private fun DiscoverSwipeSettingRow() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val on by DiscoverSwipeSetting.enabled(context).collectAsState()
@@ -355,7 +384,7 @@ private fun HelpSection(icon: ImageVector, title: String, detail: String) {
     fun update(transform: (StandSettings) -> StandSettings) = StandStore.update(context, transform)
     if (!monitor.available) Text("This phone has no hinge sensor, so Stand mode is for foldables only.",
         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Text("Shows a large clock, calendar, next alarm and battery when a foldable stands half-folded, or folded on its side while charging. Back closes it until you change position.",
+    Text("Shows a large clock, calendar, next alarm and battery when a charging foldable stands half-folded or folded on its side. Choose Always to show it half-folded without charging too. Back closes it until you change position.",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Text("When it turns on", style = MaterialTheme.typography.titleSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

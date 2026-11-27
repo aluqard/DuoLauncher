@@ -28,7 +28,8 @@ enum class StandPosture(val label: String) {
 enum class StandTrigger(val label: String) { OFF("Off"), ALWAYS("Always"), CHARGING("Only while charging") }
 
 data class StandSettings(
-    val trigger: StandTrigger = StandTrigger.ALWAYS,
+    /** Only while charging by default: holding a foldable half-open in the hand (or while unfolding) is not standing it. */
+    val trigger: StandTrigger = StandTrigger.CHARGING,
     val postures: Set<StandPosture> = setOf(StandPosture.BOOK, StandPosture.LAPTOP, StandPosture.COVER_SIDEWAYS),
     val closeWhenUnplugged: Boolean = true,
     val dimAtNight: Boolean = true,
@@ -87,7 +88,7 @@ internal fun decodeStandSettings(raw: String?): StandSettings = runCatching {
     val j = JSONObject(raw)
     val postures = j.getJSONArray("postures").let { a -> List(a.length()) { a.getString(it) } }
         .mapNotNull { name -> StandPosture.entries.firstOrNull { it.name == name } }.filter { it != StandPosture.NONE }.toSet()
-    StandSettings(StandTrigger.entries.firstOrNull { it.name == j.getString("trigger") } ?: StandTrigger.ALWAYS,
+    StandSettings(StandTrigger.entries.firstOrNull { it.name == j.getString("trigger") } ?: StandTrigger.CHARGING,
         postures.ifEmpty { StandSettings().postures }, j.optBoolean("closeWhenUnplugged", true),
         j.optBoolean("dimAtNight", true), j.optBoolean("keepScreenOn", true))
 }.getOrDefault(StandSettings())

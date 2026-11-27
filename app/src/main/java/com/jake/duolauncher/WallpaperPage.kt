@@ -18,6 +18,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -256,6 +259,38 @@ internal fun WallpaperAppearancePage(state: LauncherState, model: LauncherModel,
         }
     }
     GroupFooter("Adds a soft shadow outside glass panels such as the dock, search button and edit buttons. Turn it on to lift the glass on a dark background.")
+
+    if (remember { hasHingeSensor(context) }) {
+        GroupHeader("Folding")
+        SettingsGroup {
+            GroupSwitch("Glass door when unfolding", settings.glassDoor, "glass-door-switch") { on ->
+                WallpaperStore.update(context) { it.copy(glassDoor = on) }
+            }
+            if (settings.glassDoor) {
+                GroupDivider()
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Frost strength", Modifier.weight(1f), fontSize = 17.sp)
+                        Text("${(settings.glassDoorStrength * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+                    }
+                    Slider(settings.glassDoorStrength, { v -> WallpaperStore.update(context) { it.copy(glassDoorStrength = v) } },
+                        valueRange = .5f..1.5f, modifier = Modifier.testTag("glass-door-strength")
+                            .semantics { contentDescription = "Frost strength" })
+                }
+                GroupDivider()
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text("Frosted half", fontSize = 17.sp)
+                    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GlassDoorSide.entries.forEach { side ->
+                            FilterChip(settings.glassDoorSide == side, { WallpaperStore.update(context) { it.copy(glassDoorSide = side) } },
+                                label = { Text(side.label) }, modifier = Modifier.testTag("glass-door-side-${side.name}"))
+                        }
+                    }
+                }
+            }
+        }
+        GroupFooter("As you open or close the phone, the swinging half of Home looks like frosted glass hinged at the crease and clears as it opens flat. Near closed, the cover screen carries it on. Plays on Home only. If you stop halfway, the frost fades after a moment.")
+    }
 
     GroupHeader("Appearance")
     AppearanceSettings(appearance, onAppearanceMode, onAppearanceManual, onAppearanceDeviceLocation, onAppearanceClear)

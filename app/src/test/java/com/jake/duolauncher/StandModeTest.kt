@@ -31,7 +31,10 @@ class StandModeTest {
 
     @Test fun `settings decide whether a posture shows`() {
         val defaults = StandSettings()
-        assertTrue(shouldShowStand(StandPosture.BOOK, defaults, charging = false))
+        // Half-folded in the hand is not standing: by default Stand mode waits for the charger.
+        assertFalse(shouldShowStand(StandPosture.BOOK, defaults, charging = false))
+        assertTrue(shouldShowStand(StandPosture.BOOK, defaults, charging = true))
+        assertTrue(shouldShowStand(StandPosture.BOOK, defaults.copy(trigger = StandTrigger.ALWAYS), charging = false))
         assertFalse(shouldShowStand(StandPosture.OPEN_STANDING, defaults, charging = true))
         assertFalse(shouldShowStand(StandPosture.BOOK, defaults.copy(trigger = StandTrigger.CHARGING), charging = false))
         assertFalse(shouldShowStand(StandPosture.BOOK, defaults.copy(trigger = StandTrigger.OFF), charging = true))

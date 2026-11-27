@@ -64,18 +64,27 @@ data class WallpaperSettings(
     val device: DeviceFit? = null,
     /** Background drawn when no photo is chosen. */
     val scene: BuiltInScene = BuiltInScene.NIGHT,
+    /** Frost Home like panes of glass while a book-style foldable opens. */
+    val glassDoor: Boolean = true,
+    /** How strong that frost is, 0.5..1.5. */
+    val glassDoorStrength: Float = 1f,
+    /** Which half of the inner screen frosts. */
+    val glassDoorSide: GlassDoorSide = GlassDoorSide.LEFT,
 )
 
 internal fun encodeWallpaperSettings(s: WallpaperSettings): String = JSONObject().put("coverPhoto", s.coverPhoto)
     .put("motion", s.motion).put("glassShadow", s.glassShadow).put("device", s.device?.name ?: JSONObject.NULL)
-    .put("scene", s.scene.name).toString()
+    .put("scene", s.scene.name).put("glassDoor", s.glassDoor).put("glassDoorStrength", s.glassDoorStrength.toDouble())
+    .put("glassDoorSide", s.glassDoorSide.name).toString()
 
 internal fun decodeWallpaperSettings(raw: String?): WallpaperSettings = runCatching {
     if (raw.isNullOrBlank()) return WallpaperSettings()
     val j = JSONObject(raw)
     WallpaperSettings(j.optBoolean("coverPhoto", false), j.optBoolean("motion", true), j.optBoolean("glassShadow", false),
         if (j.isNull("device")) null else DeviceFit.entries.firstOrNull { it.name == j.optString("device") },
-        BuiltInScene.entries.firstOrNull { it.name == j.optString("scene") } ?: BuiltInScene.NIGHT)
+        BuiltInScene.entries.firstOrNull { it.name == j.optString("scene") } ?: BuiltInScene.NIGHT,
+        j.optBoolean("glassDoor", true), j.optDouble("glassDoorStrength", 1.0).toFloat().coerceIn(.5f, 1.5f),
+        GlassDoorSide.entries.firstOrNull { it.name == j.optString("glassDoorSide") } ?: GlassDoorSide.LEFT)
 }.getOrDefault(WallpaperSettings())
 
 object WallpaperStore {

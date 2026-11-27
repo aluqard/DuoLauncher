@@ -443,7 +443,10 @@ fun LauncherScreen(
     // The docks' frosted glass shows a blurred copy of the wallpaper as drawn (tilt included).
     val wallpaperLayer = rememberGraphicsLayer()
     val glassScene: androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit = { drawLayer(wallpaperLayer) }
-    Box(Modifier.fillMaxSize().graphicsLayer {
+    // Glass door: while a book-style foldable opens, Home is drawn through frosted panes hinged at the crease.
+    val doorSettings by WallpaperStore.load(androidx.compose.ui.platform.LocalContext.current).collectAsState()
+    val door = rememberGlassDoor(doorSettings.glassDoor, doorSettings.glassDoorStrength, doorSettings.glassDoorSide)
+    Box(Modifier.fillMaxSize().glassDoor(door).graphicsLayer {
         // The feed frame reuses the pager's render nodes in another window. Give Main
         // a complete render target so cross-window damage cannot erase stationary controls.
         compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
